@@ -1,0 +1,16 @@
+[package]
+name = "aura-core"
+description = "Pure data model and CRDT logic for Aura Clipboard"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+blake3.workspace = true
+hex.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+postcard.workspace = true

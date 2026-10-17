@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Menu-bar only: no Dock icon. -->
+  <key>LSUIElement</key>
+  <true/>
+  <!-- Shown in the macOS local-network permission prompt. -->
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>Aura Clipboard finds your other computers on this network and shares the clipboard with them.</string>
+  <key>NSBonjourServices</key>
+  <array>
+    <string>_aura._tcp</string>
+  </array>
+</dict>
+</plist>

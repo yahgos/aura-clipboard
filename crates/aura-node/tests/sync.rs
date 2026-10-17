@@ -1,0 +1,417 @@
+//! End-to-end tests: several nodes in one process, talking over localhost with
+//! in-memory clipboards.
+
+use std::net::SocketAddr;
+use std::path::Path;
+use std::time::Duration;
+
+use aura_clip::ClipData;
+use aura_node::{
+    Config, JoinTarget, MemoryClipboard, Node, NodeHandle, SecretStoreKind, memory_clipboard,
+};
+use tempfile::TempDir;
+
+const PASS: &str = "correct horse battery";
+
+struct TestNode {
+    name: String,
+    handle: NodeHandle,
+    clip: MemoryClipboard,
+    dir: TempDir,
+}
+
+async fn start_in(name: &str, dir: &Path, clip: MemoryClipboard) -> NodeHandle {
+    let cfg = Config {
+        device_name: name.to_string(),
+        port: 0,
+        discovery: false,
+        poll_interval_ms: 20,
+        secret_store: SecretStoreKind::File,
+        ..Config::default()
+    };
+    Node::start(dir, cfg, memory_clipboard(clip))
+        .await
+        .expect("node starts")
+}
+
+impl TestNode {
+    async fn new(name: &str) -> Self {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter("aura=debug")
+            .with_test_writer()
+            .try_init();
+        let dir = tempfile::tempdir().unwrap();
+        let clip = MemoryClipboard::new();
+        let handle = start_in(name, dir.path(), clip.clone()).await;
+        Self {
+            name: name.to_string(),
+            handle,
+            clip,
+            dir,
+        }
+    }
+
+    fn addr(&self) -> SocketAddr {
+        SocketAddr::from(([127, 0, 0, 1], self.handle.status().listen_port))
+    }
+
+    fn online_peers(&self) -> usize {
+        self.handle.status().online_peers()
+    }
+
+    fn text(&self) -> Option<String> {
+        match self.clip.current()? {
+            ClipData::Text(t) => Some(t),
+            other => Some(format!("{other:?}")),
+        }
+    }
+
+    fn copy(&self, s: &str) {
+        self.clip.user_copy(ClipData::Text(s.into()));
+    }
+
+    async fn restart(&mut self) {
+        self.handle.shutdown().await;
+        self.handle = start_in(&self.name, self.dir.path(), self.clip.clone()).await;
+    }
+}
+
+async fn eventually(what: &str, mut f: impl FnMut() -> bool) {
+    for _ in 0..500 {
+        if f() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("timed out waiting for: {what}");
+}
+
+/// A creates the group, B joins through A, C joins through B (and must find A via hints).
+async fn trio() -> (TestNode, TestNode, TestNode) {
+    let a = TestNode::new("alpha").await;
+    let b = TestNode::new("bravo").await;
+    let c = TestNode::new("charlie").await;
+    a.handle.create_group("Home", PASS).await.unwrap();
+    b.handle
+        .join(JoinTarget::Addr(a.addr()), PASS)
+        .await
+        .unwrap();
+    c.handle
+        .join(JoinTarget::Addr(b.addr()), PASS)
+        .await
+        .unwrap();
+    eventually("full mesh", || {
+        a.online_peers() == 2 && b.online_peers() == 2 && c.online_peers() == 2
+    })
+    .await;
+    (a, b, c)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn copies_propagate_to_every_device_without_echo() {
+    let (a, b, c) = trio().await;
+
+    a.copy("hello from alpha");
+    eventually("b and c receive", || {
+        b.text().as_deref() == Some("hello from alpha")
+            && c.text().as_deref() == Some("hello from alpha")
+    })
+    .await;
+
+    c.copy("hi from charlie");
+    eventually("a and b receive", || {
+        a.text().as_deref() == Some("hi from charlie")
+            && b.text().as_deref() == Some("hi from charlie")
+    })
+    .await;
+
+    // Let any echo loop show itself.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        a.clip.engine_writes(),
+        1,
+        "alpha only applied charlie's entry"
+    );
+    assert_eq!(
+        c.clip.engine_writes(),
+        1,
+        "charlie only applied alpha's entry"
+    );
+    for n in [&a, &b, &c] {
+        let s = n.handle.status();
+        assert_eq!(s.history.len(), 2, "{} history", n.name);
+        assert_eq!(s.history[0].origin, "charlie");
+        assert_eq!(s.group.as_ref().unwrap().name, "Home");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_copies_converge_to_one_winner() {
+    let (a, b, c) = trio().await;
+    a.copy("from a");
+    b.copy("from b");
+    c.copy("from c");
+    eventually("all agree", || {
+        let (x, y, z) = (a.text(), b.text(), c.text());
+        x.is_some() && x == y && y == z && {
+            let ids: Vec<_> = [&a, &b, &c]
+                .iter()
+                .map(|n| n.handle.status().history.first().map(|h| h.id.clone()))
+                .collect();
+            ids[0] == ids[1] && ids[1] == ids[2]
+        }
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn wrong_passphrase_is_rejected() {
+    let a = TestNode::new("alpha").await;
+    let b = TestNode::new("bravo").await;
+    a.handle.create_group("Home", PASS).await.unwrap();
+    let err = b
+        .handle
+        .join(JoinTarget::Addr(a.addr()), "not the passphrase")
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("wrong passphrase"), "{err:#}");
+    assert!(b.handle.status().group.is_none());
+    assert_eq!(a.handle.status().members.len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn removed_device_is_dropped_and_can_rejoin_with_new_identity() {
+    let (a, b, c) = trio().await;
+    let c_id = c.handle.status().device_id.parse().unwrap();
+    a.handle.remove_device(c_id).await.unwrap();
+    eventually("charlie leaves", || c.handle.status().group.is_none()).await;
+    eventually("others drop charlie", || {
+        a.handle.status().members.len() == 2 && b.handle.status().members.len() == 2
+    })
+    .await;
+
+    a.copy("secret after removal");
+    eventually("b receives", || {
+        b.text().as_deref() == Some("secret after removal")
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_ne!(c.text().as_deref(), Some("secret after removal"));
+
+    // Leaving regenerated charlie's identity, so it can join again.
+    assert_ne!(c.handle.status().device_id, c_id.to_string());
+    c.handle
+        .join(JoinTarget::Addr(a.addr()), PASS)
+        .await
+        .unwrap();
+    eventually("charlie back", || c.online_peers() == 2).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn offline_device_catches_up_on_restart() {
+    let a = TestNode::new("alpha").await;
+    let mut b = TestNode::new("bravo").await;
+    a.handle.create_group("Home", PASS).await.unwrap();
+    b.handle
+        .join(JoinTarget::Addr(a.addr()), PASS)
+        .await
+        .unwrap();
+    eventually("connected", || a.online_peers() == 1).await;
+
+    b.handle.shutdown().await;
+    eventually("a notices", || a.online_peers() == 0).await;
+    a.copy("copied while bravo slept");
+
+    b.restart().await;
+    eventually("b catches up", || {
+        b.text().as_deref() == Some("copied while bravo slept")
+    })
+    .await;
+    assert_eq!(b.handle.status().group.unwrap().name, "Home");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn images_sync() {
+    let a = TestNode::new("alpha").await;
+    let b = TestNode::new("bravo").await;
+    a.handle.create_group("Home", PASS).await.unwrap();
+    b.handle
+        .join(JoinTarget::Addr(a.addr()), PASS)
+        .await
+        .unwrap();
+    eventually("connected", || a.online_peers() == 1).await;
+
+    // ~1 MB of noisy RGBA so the PNG spans many Noise frames.
+    let (w, h) = (512u32, 512u32);
+    let mut seed = 1u32;
+    let rgba: Vec<u8> = (0..w * h * 4)
+        .map(|_| {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed as u8
+        })
+        .collect();
+    let img = ClipData::Image {
+        width: w,
+        height: h,
+        rgba,
+    };
+    a.clip.user_copy(img.clone());
+    eventually("image arrives", || b.clip.current().as_ref() == Some(&img)).await;
+    assert_eq!(b.handle.status().history[0].kind, "image");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn paused_device_neither_sends_nor_applies() {
+    let a = TestNode::new("alpha").await;
+    let b = TestNode::new("bravo").await;
+    a.handle.create_group("Home", PASS).await.unwrap();
+    b.handle
+        .join(JoinTarget::Addr(a.addr()), PASS)
+        .await
+        .unwrap();
+    eventually("connected", || a.online_peers() == 1).await;
+
+    b.handle.set_paused(true).await.unwrap();
+    b.copy("private on bravo");
+    a.copy("from alpha");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(b.text().as_deref(), Some("private on bravo"));
+    assert_eq!(a.text().as_deref(), Some("from alpha"));
+
+    b.handle.set_paused(false).await.unwrap();
+    eventually("b catches up after unpause", || {
+        b.text().as_deref() == Some("from alpha")
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recopy_makes_old_entry_current_everywhere() {
+    let a = TestNode::new("alpha").await;
+    let b = TestNode::new("bravo").await;
+    a.handle.create_group("Home", PASS).await.unwrap();
+    b.handle
+        .join(JoinTarget::Addr(a.addr()), PASS)
+        .await
+        .unwrap();
+    eventually("connected", || a.online_peers() == 1).await;
+
+    a.copy("first");
+    eventually("b first", || b.text().as_deref() == Some("first")).await;
+    a.copy("second");
+    eventually("b second", || b.text().as_deref() == Some("second")).await;
+
+    let old = b
+        .handle
+        .status()
+        .history
+        .iter()
+        .find(|h| h.preview == "first")
+        .unwrap()
+        .id
+        .clone();
+    b.handle
+        .recopy(aura_node::EntryId::from_hex(&old).unwrap())
+        .await
+        .unwrap();
+    eventually("both back to first", || {
+        a.text().as_deref() == Some("first") && b.text().as_deref() == Some("first")
+    })
+    .await;
+}
+
+fn key_version(n: &TestNode) -> Option<(u64, String)> {
+    n.handle
+        .status()
+        .group
+        .map(|g| (g.passphrase_changed_ms, g.passphrase_changed_by))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn passphrase_rotation_reaches_everyone_and_gates_new_joins() {
+    let (a, b, c) = trio().await;
+    let before = key_version(&a);
+    a.handle
+        .rotate_passphrase("brand new passphrase")
+        .await
+        .unwrap();
+    eventually("all members have the new key", || {
+        let v = key_version(&a);
+        v != before && v == key_version(&b) && v == key_version(&c)
+    })
+    .await;
+    assert_eq!(key_version(&c).unwrap().1, "alpha");
+
+    // Join through charlie, who only learned the key through gossip.
+    let d = TestNode::new("delta").await;
+    let err = d
+        .handle
+        .join(JoinTarget::Addr(c.addr()), PASS)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("wrong passphrase"), "{err:#}");
+    d.handle
+        .join(JoinTarget::Addr(c.addr()), "brand new passphrase")
+        .await
+        .unwrap();
+    eventually("delta meshes", || d.online_peers() == 3).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn offline_member_gets_the_rotated_key_on_reconnect() {
+    let a = TestNode::new("alpha").await;
+    let mut b = TestNode::new("bravo").await;
+    a.handle.create_group("Home", PASS).await.unwrap();
+    b.handle
+        .join(JoinTarget::Addr(a.addr()), PASS)
+        .await
+        .unwrap();
+    eventually("connected", || a.online_peers() == 1).await;
+
+    b.handle.shutdown().await;
+    eventually("a notices", || a.online_peers() == 0).await;
+    a.handle
+        .rotate_passphrase("rotated while away")
+        .await
+        .unwrap();
+
+    b.restart().await;
+    eventually("b catches up on the key", || {
+        key_version(&b) == key_version(&a)
+    })
+    .await;
+    let c = TestNode::new("charlie").await;
+    c.handle
+        .join(JoinTarget::Addr(b.addr()), "rotated while away")
+        .await
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_rotations_converge() {
+    let (a, b, c) = trio().await;
+    let (ra, rb) = tokio::join!(
+        a.handle.rotate_passphrase("alpha's new passphrase"),
+        b.handle.rotate_passphrase("bravo's new passphrase"),
+    );
+    // One of them may lose the race locally; at least one must succeed.
+    assert!(ra.is_ok() || rb.is_ok());
+    eventually("everyone agrees on one key", || {
+        let v = key_version(&a);
+        v == key_version(&b) && v == key_version(&c)
+    })
+    .await;
+    let winner = key_version(&a).unwrap().1;
+    let pass = if winner == "alpha" {
+        "alpha's new passphrase"
+    } else {
+        "bravo's new passphrase"
+    };
+    let d = TestNode::new("delta").await;
+    d.handle
+        .join(JoinTarget::Addr(c.addr()), pass)
+        .await
+        .unwrap();
+}

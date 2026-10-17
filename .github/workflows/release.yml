@@ -1,0 +1,116 @@
+# Push a tag like `v0.1.0` to build installers for every OS and attach them to a
+# draft GitHub Release. Review the draft, then publish it.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)build, e.g. v0.1.0"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --draft \
+            --title "Aura Clipboard $TAG" \
+            --notes "Download the file for your system below. See the README for install steps."
+
+  app:
+    needs: create-release
+    name: app (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS (Apple Silicon + Intel)
+            os: macos-latest
+            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
+            args: --target universal-apple-darwin
+          # Oldest supported Ubuntu, so the AppImage runs on older glibc too.
+          - name: Linux
+            os: ubuntu-22.04
+            rust-targets: ""
+            args: ""
+          - name: Windows
+            os: windows-latest
+            rust-targets: ""
+            args: ""
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev patchelf
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          projectPath: apps/aura-tray
+          tauriScript: cargo tauri
+          tagName: ${{ env.TAG }}
+          releaseName: Aura Clipboard ${{ env.TAG }}
+          releaseDraft: true
+          args: ${{ matrix.args }}
+
+  # Standalone `aura` command-line binaries (headless PCs, servers, scripting).
+  cli:
+    needs: create-release
+    name: cli (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu }
+          - { os: macos-latest, target: aarch64-apple-darwin }
+          - { os: macos-latest, target: x86_64-apple-darwin }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p aura-cli --target ${{ matrix.target }}
+      - name: Package and upload
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          name="aura-cli-$TAG-${{ matrix.target }}"
+          mkdir "$name"
+          if [[ "${{ matrix.target }}" == *windows* ]]; then
+            cp "target/${{ matrix.target }}/release/aura.exe" "$name/"
+            7z a "$name.zip" "$name" >/dev/null
+            file="$name.zip"
+          else
+            cp "target/${{ matrix.target }}/release/aura" "$name/"
+            tar czf "$name.tar.gz" "$name"
+            file="$name.tar.gz"
+          fi
+          gh release upload "$TAG" "$file" --clobber

@@ -1,0 +1,28 @@
+[package]
+name = "aura-clip"
+description = "OS clipboard access, change detection and echo suppression"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+aura-core.workspace = true
+anyhow.workspace = true
+blake3.workspace = true
+tracing.workspace = true
+arboard.workspace = true
+image.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString", "NSArray"] }
+objc2-app-kit = { version = "0.3", features = ["NSPasteboard"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_DataExchange", "Win32_Foundation"] }
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+arboard = { workspace = true, features = ["wayland-data-control"] }
+# Same versions arboard uses; needed to list offered MIME types / X11 targets.
+wl-clipboard-rs = "0.9"
+x11rb = "0.13"

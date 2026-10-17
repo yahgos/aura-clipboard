@@ -1,0 +1,22 @@
+[package]
+name = "aura-cli"
+description = "Headless runner and debug tool for Aura Clipboard"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "aura"
+path = "src/main.rs"
+
+[dependencies]
+aura-core.workspace = true
+aura-net.workspace = true
+aura-clip.workspace = true
+aura-node.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+rpassword.workspace = true
+tokio = { workspace = true, features = ["signal"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true

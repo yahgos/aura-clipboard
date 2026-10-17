@@ -1,0 +1,24 @@
+[package]
+name = "aura-net"
+description = "Wire protocol, Noise sessions, PAKE enrollment and mDNS discovery"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+aura-core.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+postcard.workspace = true
+blake3.workspace = true
+hex.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+snow.workspace = true
+spake2.workspace = true
+argon2.workspace = true
+mdns-sd.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

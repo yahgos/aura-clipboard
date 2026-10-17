@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Aura Clipboard</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <div class="logo" aria-hidden="true"><span></span><span></span></div>
+    <div class="title">
+      <h1>Aura Clipboard</h1>
+      <p id="device">…</p>
+    </div>
+    <span id="pill" class="pill">…</span>
+  </header>
+
+  <main>
+    <!-- Not in a group yet -->
+    <section id="setup" hidden>
+      <div class="card">
+        <h2>Join a group</h2>
+        <p class="hint">Groups found on this network:</p>
+        <div id="found" class="found"></div>
+        <details id="manual">
+          <summary>Enter an address instead</summary>
+          <input id="join-address" placeholder="other PC's IP or name, e.g. 192.168.1.20" autocomplete="off" />
+        </details>
+        <label>Passphrase <input id="join-pass" type="password" autocomplete="off" /></label>
+        <button id="join-btn" class="primary">Join</button>
+      </div>
+
+      <div class="card">
+        <h2>Create a group</h2>
+        <p class="hint">Start a group on this PC, then join it from the others with the same passphrase.</p>
+        <label>Group name <input id="create-name" placeholder="Home" autocomplete="off" /></label>
+        <label>Passphrase <input id="create-pass" type="password" autocomplete="new-password" /></label>
+        <label>Repeat passphrase <input id="create-pass2" type="password" autocomplete="new-password" /></label>
+        <button id="create-btn">Create group</button>
+      </div>
+    </section>
+
+    <!-- In a group -->
+    <section id="group" hidden>
+      <div class="card">
+        <div class="row">
+          <h2 id="group-name">Group</h2>
+          <label class="switch" title="Pause sync on this PC">
+            <input id="pause" type="checkbox" />
+            <span>Pause sync</span>
+          </label>
+        </div>
+        <ul id="members" class="list"></ul>
+        <p class="hint">To add a PC, open Aura on it and join with the group passphrase.</p>
+        <details id="rotate">
+          <summary>Change passphrase</summary>
+          <p class="hint" id="rotate-info">PCs already in the group stay in. New PCs will need the new passphrase.</p>
+          <label>New passphrase <input id="rotate-pass" type="password" autocomplete="new-password" /></label>
+          <label>Repeat <input id="rotate-pass2" type="password" autocomplete="new-password" /></label>
+          <button id="rotate-btn">Change for every PC</button>
+        </details>
+        <button id="leave-btn" class="danger subtle">Leave group</button>
+      </div>
+
+      <div class="card">
+        <h2>Recent</h2>
+        <ul id="history" class="list"></ul>
+        <p id="history-empty" class="hint">Copy something on any PC in the group.</p>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script src="app.js"></script>
+</body>
+</html>

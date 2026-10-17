@@ -1,0 +1,58 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/aura-core",
+    "crates/aura-net",
+    "crates/aura-clip",
+    "crates/aura-node",
+    "apps/aura-cli",
+    "apps/aura-tray",
+]
+default-members = [
+    "crates/aura-core",
+    "crates/aura-net",
+    "crates/aura-clip",
+    "crates/aura-node",
+    "apps/aura-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/yahgos/aura-clipboard"
+
+[workspace.dependencies]
+aura-core = { path = "crates/aura-core" }
+aura-net = { path = "crates/aura-net" }
+aura-clip = { path = "crates/aura-clip" }
+aura-node = { path = "crates/aura-node" }
+
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+postcard = { version = "1", features = ["use-std"] }
+blake3 = "1"
+hex = "0.4"
+getrandom = "0.3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+snow = "0.10"
+spake2 = "0.4"
+argon2 = "0.6"
+mdns-sd = "0.21"
+arboard = "3"
+image = { version = "0.25", default-features = false, features = ["png"] }
+redb = "4"
+keyring = "4"
+directories = "6"
+toml = "1"
+clap = { version = "4", features = ["derive", "env"] }
+rpassword = "7"
+proptest = "1"
+tempfile = "3"
+
+# Argon2, PNG and crypto are painfully slow unoptimized; optimize dependencies even in dev.
+[profile.dev.package."*"]
+opt-level = 2
