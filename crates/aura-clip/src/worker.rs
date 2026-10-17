@@ -35,16 +35,17 @@ impl ClipboardWorker {
             .spawn(move || {
                 // Some platforms (X11) want the clipboard created on the thread that uses it.
                 let mut backend = match make_backend() {
-                    Ok(b) => {
-                        let _ = ready_tx.send(Ok(()));
-                        b
-                    }
+                    Ok(b) => b,
                     Err(e) => {
                         let _ = ready_tx.send(Err(e));
                         return;
                     }
                 };
+                // Snapshot the startup content before reporting ready. Otherwise a copy
+                // made right after `spawn` returns could land in the snapshot and never
+                // be reported as a change.
                 let mut filter = ChangeFilter::prime(backend.as_mut());
+                let _ = ready_tx.send(Ok(()));
                 let mut writes_applied = 0u64;
                 loop {
                     match write_rx.recv_timeout(poll) {
@@ -99,6 +100,52 @@ mod tests {
     use super::*;
     use crate::MemoryClipboard;
     use std::sync::mpsc::channel;
+
+    /// A clipboard whose first read is slow, to widen the startup window.
+    struct SlowFirstRead {
+        inner: MemoryClipboard,
+        first: bool,
+    }
+
+    impl ClipboardBackend for SlowFirstRead {
+        fn change_token(&mut self) -> Option<u64> {
+            self.inner.change_token()
+        }
+        fn is_concealed(&mut self) -> bool {
+            self.inner.is_concealed()
+        }
+        fn read(&mut self) -> anyhow::Result<Option<ClipData>> {
+            if std::mem::take(&mut self.first) {
+                thread::sleep(Duration::from_millis(200));
+            }
+            self.inner.read()
+        }
+        fn write(&mut self, data: &ClipData) -> anyhow::Result<()> {
+            self.inner.write(data)
+        }
+    }
+
+    #[test]
+    fn copy_right_after_spawn_is_reported() {
+        let user = MemoryClipboard::new();
+        let backend = SlowFirstRead {
+            inner: user.clone(),
+            first: true,
+        };
+        let (tx, rx) = channel();
+        let _worker = ClipboardWorker::spawn(
+            move || Ok(Box::new(backend) as Box<dyn ClipboardBackend>),
+            Duration::from_millis(5),
+            move |d, _| tx.send(d).unwrap(),
+        )
+        .unwrap();
+        // `spawn` returned, so the startup snapshot is done; this copy is new.
+        user.user_copy(ClipData::Text("early".into()));
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            Content::Text("early".into())
+        );
+    }
 
     #[test]
     fn worker_reports_and_writes() {
