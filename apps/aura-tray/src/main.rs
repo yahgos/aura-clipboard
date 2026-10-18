@@ -123,11 +123,31 @@ async fn recopy(node: State<'_, NodeHandle>, id: String) -> CmdResult {
 // ------------------------------------------------------------------ window
 
 fn show_window(app: &AppHandle) {
-    open_window(app, false);
+    open_window(app, View::Main);
 }
 
-/// Shows the window, optionally with the search box focused.
-fn open_window(app: &AppHandle, focus_search: bool) {
+/// What the window should show when it opens.
+#[derive(Clone, Copy, PartialEq)]
+enum View {
+    Main,
+    /// The main screen with the search box focused.
+    Search,
+    /// The Settings panel (group, phone page, passphrase).
+    Settings,
+}
+
+impl View {
+    /// (event for an open window, URL hash for a new one)
+    fn signal(self) -> Option<(&'static str, &'static str)> {
+        match self {
+            View::Main => None,
+            View::Search => Some(("focus-search", "search")),
+            View::Settings => Some(("open-settings", "settings")),
+        }
+    }
+}
+
+fn open_window(app: &AppHandle, view: View) {
     // Aura has no Dock icon, so macOS would leave its window behind the active app.
     #[cfg(target_os = "macos")]
     let _ = app.show();
@@ -135,16 +155,15 @@ fn open_window(app: &AppHandle, focus_search: bool) {
         let _ = w.show();
         let _ = w.unminimize();
         let _ = w.set_focus();
-        if focus_search {
-            let _ = w.emit("focus-search", ());
+        if let Some((event, _)) = view.signal() {
+            let _ = w.emit(event, ());
         }
         return;
     }
     // A new window can't receive events before its page loads; the page reads the hash.
-    let page = if focus_search {
-        "index.html#search"
-    } else {
-        "index.html"
+    let page = match view.signal() {
+        Some((_, hash)) => format!("index.html#{hash}"),
+        None => "index.html".to_string(),
     };
     let built = WebviewWindowBuilder::new(app, "main", WebviewUrl::App(page.into()))
         .title("Aura Clipboard")
@@ -269,8 +288,8 @@ fn refresh_tray(app: &AppHandle, s: &Status) {
 fn on_menu(app: &AppHandle, id: &str) {
     let node = app.state::<NodeHandle>().inner().clone();
     match id {
-        "open" => show_window(app),
-        "search" => open_window(app, true),
+        "open" => open_window(app, View::Settings),
+        "search" => open_window(app, View::Search),
         "quit" => {
             tauri::async_runtime::block_on(node.shutdown());
             app.exit(0);

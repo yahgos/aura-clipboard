@@ -52,6 +52,8 @@ function render(s) {
   $("device").textContent = `${s.device_name} · ${where}`;
   const inGroup = !!s.group;
   $("setup").hidden = inGroup;
+  $("settings-btn").hidden = !inGroup;
+  if (!inGroup) closeSettings();
   $("group").hidden = !inGroup;
 
   const pill = $("pill");
@@ -195,7 +197,38 @@ $("search").addEventListener("keydown", (ev) => {
   }
 });
 
+// ------------------------------------------------------------------ settings panel
+
+function openSettings() {
+  const panel = $("settings");
+  panel.classList.add("open");
+  panel.removeAttribute("inert");
+  panel.setAttribute("aria-hidden", "false");
+  $("settings-back").focus();
+}
+
+function closeSettings() {
+  const panel = $("settings");
+  if (!panel.classList.contains("open")) return;
+  panel.classList.remove("open");
+  panel.setAttribute("inert", "");
+  panel.setAttribute("aria-hidden", "true");
+  if (!$("settings-btn").hidden) $("settings-btn").focus();
+}
+
+$("settings-btn").addEventListener("click", openSettings);
+$("settings-back").addEventListener("click", closeSettings);
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape" && $("settings").classList.contains("open")) {
+    ev.preventDefault();
+    closeSettings();
+  }
+});
+// Only a PC in a group has settings; otherwise the window shows create/join.
+listen("open-settings", () => current && current.group && openSettings());
+
 function focusSearch() {
+  closeSettings();
   $("search").focus();
   $("search").select();
 }
@@ -291,6 +324,7 @@ listen("status", (e) => render(e.payload));
 invoke("get_status").then((s) => {
   render(s);
   if (location.hash === "#search") focusSearch();
+  if (location.hash === "#settings" && s.group) openSettings();
 });
 // Keep "x min ago" fresh.
 setInterval(() => current && current.group && renderGroup(current), 30000);
