@@ -320,6 +320,58 @@ async fn recopy_makes_old_entry_current_everywhere() {
         a.text().as_deref() == Some("first") && b.text().as_deref() == Some("first")
     })
     .await;
+
+    // The recopied entry moves to the top instead of being listed twice, on both PCs.
+    let previews = |n: &TestNode| -> Vec<String> {
+        n.handle
+            .status()
+            .history
+            .into_iter()
+            .map(|h| h.preview)
+            .collect()
+    };
+    eventually("histories deduplicated", || {
+        previews(&a) == ["first", "second"] && previews(&b) == ["first", "second"]
+    })
+    .await;
+    // Give a late echo or duplicate a chance to show up.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(previews(&a), ["first", "second"]);
+    assert_eq!(previews(&b), ["first", "second"]);
+    // Alpha copied "first" and "second" itself; its only remote write is bravo's recopy.
+    assert_eq!(a.clip.engine_writes(), 1);
+    // Bravo applied alpha's two copies, then wrote the recopied entry locally.
+    assert_eq!(b.clip.engine_writes(), 3);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn copying_the_same_text_again_does_not_duplicate_history() {
+    let a = TestNode::new("alpha").await;
+    let b = TestNode::new("bravo").await;
+    a.handle.create_group("Home", PASS).await.unwrap();
+    b.handle
+        .join(JoinTarget::Addr(a.addr()), PASS)
+        .await
+        .unwrap();
+    eventually("connected", || a.online_peers() == 1).await;
+
+    a.copy("hello");
+    eventually("b hello", || b.text().as_deref() == Some("hello")).await;
+    b.copy("world");
+    eventually("a world", || a.text().as_deref() == Some("world")).await;
+    a.copy("hello");
+    eventually("b hello again", || b.text().as_deref() == Some("hello")).await;
+
+    for n in [&a, &b] {
+        let previews: Vec<String> = n
+            .handle
+            .status()
+            .history
+            .into_iter()
+            .map(|h| h.preview)
+            .collect();
+        assert_eq!(previews, ["hello", "world"], "{}", n.name);
+    }
 }
 
 fn key_version(n: &TestNode) -> Option<(u64, String)> {
