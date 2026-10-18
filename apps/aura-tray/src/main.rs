@@ -164,12 +164,13 @@ fn open_window(app: &AppHandle, focus_search: bool) {
 fn status_line(s: &Status) -> String {
     match &s.group {
         Some(g) => {
-            let others = s.members.len().saturating_sub(1);
+            // Every PC in the group, this one included.
+            let online = s.members.iter().filter(|m| m.online).count();
             format!(
                 "{} · {} of {} online{}",
                 g.name,
-                s.online_peers(),
-                others,
+                online,
+                s.members.len(),
                 if s.paused { " · paused" } else { "" }
             )
         }

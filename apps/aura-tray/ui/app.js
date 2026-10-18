@@ -56,10 +56,12 @@ function render(s) {
 
   const pill = $("pill");
   if (inGroup) {
-    const others = s.members.filter((m) => !m.is_self);
-    const online = others.filter((m) => m.online).length;
-    pill.textContent = s.paused ? "Paused" : `${online}/${others.length} online`;
-    pill.className = "pill" + (online > 0 && !s.paused ? " ok" : "");
+    // Counts every PC in the group, this one included (it is always online).
+    const online = s.members.filter((m) => m.online).length;
+    pill.textContent = s.paused ? "Paused" : `${online}/${s.members.length} online`;
+    pill.title = "PCs in the group that are online, this one included";
+    // Green once another PC is connected, i.e. copies actually go somewhere.
+    pill.className = "pill" + (online > 1 && !s.paused ? " ok" : "");
     renderGroup(s);
   } else {
     pill.textContent = "No group";
