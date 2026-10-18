@@ -102,6 +102,27 @@ Open **Devices & settings**, click **Remove** next to the PC, then use **Change
 passphrase**. The removed PC stops receiving clipboard entries immediately, and
 the new passphrase keeps it from joining again. Your other PCs stay connected.
 
+## Search
+
+Aura keeps your last 500 copies, and every frontend can search them: the box at
+the top of **Recent** in Aura's window (or **Search…** in the tray menu), the
+search field on the phone page, and `aura search` in a terminal.
+
+You don't have to type exactly what you copied. Letters in the right order are
+enough, so `cgtst` finds "cargo test" and `wifi pw` finds "wifi password". Small
+typos in longer words are forgiven too, so `pasword` and `tset` still find
+"password" and "test". Every word you type has to match, and the best matches
+come first. In the PC window, Enter copies the top result and Esc clears the
+search.
+
+```bash
+aura search cgtst            # list matches, best first
+aura search wifi --copy 1    # put the best match back on every PC's clipboard
+```
+
+`aura search` asks the running Aura (tray app or `aura run`). If Aura isn't
+running, it searches the saved history instead.
+
 ## Use it from your phone
 
 One of your PCs, the fofoqueiro, also serves your clipboard as a web page, so
@@ -156,7 +177,8 @@ The first run creates `config.toml` in the data directory:
 - Windows: `%APPDATA%\aura\aura-clipboard\data`
 
 The file holds the device name, the port (47820 by default), static peers for
-networks without multicast, size limits, the history length, the secret store
+networks without multicast, size limits, the history length (500 entries, up to
+100 MB in total), the secret store
 (`keyring` or `file`), the phone page port (47821) and whether this PC may serve
 the phone page (`web_enabled`). The keyring is the macOS Keychain, the Windows
 Credential Manager, or the Secret Service (GNOME Keyring or KWallet) on Linux.
@@ -233,6 +255,7 @@ run several nodes in one process with in-memory clipboards. They cover:
 - 1 MB images
 - pausing, and recopying from history
 - passphrase changes, including PCs that were offline and two changes at once
+- search on a running node, through the CLI's control channel, and offline
 - electing the PC that serves the phone page, failover, and opting out
 
 [`crates/aura-web/tests/web.rs`](crates/aura-web/tests/web.rs) drives the phone

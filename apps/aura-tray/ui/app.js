@@ -146,10 +146,69 @@ function renderGroup(s) {
     );
   }
 
+  if (searchQuery()) {
+    scheduleSearch(); // new entries may match the current search
+  } else {
+    renderHistory(s.history.map((h) => ({ ...h, parts: [{ text: h.preview || "(empty)", hit: false }] })));
+  }
+}
+
+// ------------------------------------------------------------------ search
+
+let searchTimer;
+let lastResults = [];
+const searchQuery = () => $("search").value.trim();
+
+function scheduleSearch() {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(runSearch, 100);
+}
+
+async function runSearch() {
+  const query = searchQuery();
+  if (!query) {
+    if (current) renderGroup(current);
+    return;
+  }
+  try {
+    const results = await invoke("search", { query, limit: 50 });
+    if (query !== searchQuery()) return; // typed on meanwhile
+    lastResults = results;
+    renderHistory(results.map((r) => ({ ...r, parts: r.snippet })), true);
+  } catch (e) {
+    toast(String(e), true);
+  }
+}
+
+async function recopy(id) {
+  await invoke("recopy", { id });
+  toast("Copied");
+}
+
+$("search").addEventListener("input", scheduleSearch);
+$("search").addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape") {
+    $("search").value = "";
+    runSearch();
+  } else if (ev.key === "Enter" && searchQuery() && lastResults.length) {
+    recopy(lastResults[0].id).catch((e) => toast(String(e), true));
+  }
+});
+
+function focusSearch() {
+  $("search").focus();
+  $("search").select();
+}
+listen("focus-search", focusSearch);
+
+function renderHistory(items, searching = false) {
   const hist = $("history");
   hist.replaceChildren();
-  $("history-empty").hidden = s.history.length > 0;
-  for (const h of s.history) {
+  $("history-empty").hidden = items.length > 0;
+  $("history-empty").textContent = searching
+    ? "Nothing matches. Try fewer or shorter words."
+    : "Copy something on any PC in the group.";
+  for (const h of items) {
     hist.append(
       el(
         "li",
@@ -157,7 +216,7 @@ function renderGroup(s) {
         el(
           "div",
           { class: "grow" },
-          el("div", { class: "main" }, h.preview || "(empty)"),
+          el("div", { class: "main" }, ...h.parts.map((p) => (p.hit ? el("mark", {}, p.text) : p.text))),
           el("div", { class: "sub" }, `${h.origin} · ${ago(h.at_ms)}`),
         ),
         el(
@@ -165,10 +224,7 @@ function renderGroup(s) {
           {
             class: "small",
             title: "Put this back on the clipboard of every PC",
-            onclick: (ev) => run(ev.target, "…", async () => {
-              await invoke("recopy", { id: h.id });
-              toast("Copied");
-            }),
+            onclick: (ev) => run(ev.target, "…", () => recopy(h.id)),
           },
           "Copy",
         ),
@@ -232,6 +288,9 @@ $("leave-btn").addEventListener("click", (ev) => {
 });
 
 listen("status", (e) => render(e.payload));
-invoke("get_status").then(render);
+invoke("get_status").then((s) => {
+  render(s);
+  if (location.hash === "#search") focusSearch();
+});
 // Keep "x min ago" fresh.
 setInterval(() => current && current.group && renderGroup(current), 30000);

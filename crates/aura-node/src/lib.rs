@@ -4,6 +4,7 @@
 mod actor;
 mod api;
 pub mod config;
+pub mod control;
 mod secrets;
 mod store;
 pub mod webcert;
@@ -17,9 +18,10 @@ use tokio::net::TcpListener;
 use tokio::sync::{broadcast, mpsc, watch};
 
 pub use api::{
-    DiscoveredGroup, Event, GroupStatus, HistoryItem, JoinTarget, MemberStatus, NodeHandle, Status,
+    DiscoveredGroup, Event, GroupStatus, HistoryItem, JoinTarget, MemberStatus, NodeHandle,
+    SearchResult, Status,
 };
-pub use aura_core::{Content, DeviceId, Entry, EntryId, GroupId};
+pub use aura_core::{Content, DeviceId, Entry, EntryId, GroupId, SnippetPart};
 pub use aura_net::proto::WebCert;
 pub use config::{Config, SecretStoreKind, default_data_dir};
 
@@ -102,6 +104,14 @@ impl Node {
         };
         // Wait for the first real status.
         let _ = handle.status_rx.changed().await;
+        // Lets the `aura` CLI reach this node (e.g. `aura search`).
+        let control_node = handle.clone();
+        let control_dir = data_dir.to_path_buf();
+        tokio::spawn(async move {
+            if let Err(e) = control::serve(control_node, control_dir).await {
+                tracing::warn!("control channel unavailable: {e:#}");
+            }
+        });
         Ok(handle)
     }
 }
@@ -132,6 +142,29 @@ pub async fn resolve_peer(addr: &str) -> Result<SocketAddr> {
         .with_context(|| format!("resolving {addr}"))?
         .find(|a| a.is_ipv4())
         .with_context(|| format!("no IPv4 address for {addr}"))
+}
+
+/// Searches the history of a node that is *not* running, straight from its database
+/// (the database is locked while Aura runs; use [`control::Client`] then).
+pub fn search_offline(data_dir: &Path, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
+    let store = Store::open(data_dir)?;
+    let mut entries = store.load_history()?;
+    entries.sort_by_key(|e| std::cmp::Reverse(e.id));
+    let membership = store.membership()?;
+    let names = entries
+        .iter()
+        .filter_map(|e| {
+            let m = membership.get_any(&e.id.origin)?;
+            Some((e.id.origin, m.name.clone()))
+        })
+        .collect();
+    Ok(api::search_results(&entries, &names, query, limit))
+}
+
+/// One history entry of a node that is not running.
+pub fn entry_offline(data_dir: &Path, id: EntryId) -> Result<Option<Entry>> {
+    let store = Store::open(data_dir)?;
+    Ok(store.load_history()?.into_iter().find(|e| e.id == id))
 }
 
 async fn bind(port: u16) -> Result<TcpListener> {

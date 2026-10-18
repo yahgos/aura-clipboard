@@ -3,6 +3,7 @@
 const $ = (id) => document.getElementById(id);
 let items = [];
 let lastData = null;
+let lastFound = null;
 let events = null;
 
 function el(tag, attrs = {}, ...children) {
@@ -98,11 +99,17 @@ function itemBody(item, big) {
   if (item.kind === "image") {
     return el("img", { src: imageUrl(item), alt: `image ${item.width}×${item.height}`, loading: "lazy" });
   }
+  if (item.snippet) {
+    // Search result: show the matched part with the hits highlighted.
+    return el("div", { class: "main" }, ...item.snippet.map((p) => (p.hit ? el("mark", {}, p.text) : p.text)));
+  }
   return el("div", { class: big ? "text" : "main" }, item.text || "");
 }
 
-function render(data) {
+/// `data` is the recent history; `found` holds search results while searching.
+function render(data, found = null) {
   lastData = data;
+  lastFound = found;
   items = data.items;
   $("where").textContent = data.group ? `${data.group} · served by ${data.served_by}` : "Shared clipboard";
 
@@ -122,10 +129,13 @@ function render(data) {
     box.append(itemBody(cur, true), actions);
   }
 
+  const listed = found ? found.items : items.slice(1);
+  $("history-title").textContent = found ? `Results for "${found.query}"` : "Recent";
   const list = $("history");
   list.replaceChildren();
-  $("history-empty").hidden = items.length > 1;
-  for (const item of items.slice(1)) {
+  $("history-empty").hidden = listed.length > 0;
+  $("history-empty").textContent = found ? "Nothing matches. Try fewer or shorter words." : "Nothing else yet.";
+  for (const item of listed) {
     list.append(el("li", {},
       el("div", { class: "grow" },
         itemBody(item, false),
@@ -136,7 +146,11 @@ function render(data) {
 
 async function load() {
   try {
-    render(await api("/api/history"));
+    const recent = await api("/api/history");
+    const query = $("search").value.trim();
+    const found = query ? await api(`/api/history?q=${encodeURIComponent(query)}`) : null;
+    if (query !== $("search").value.trim()) return; // typed on meanwhile
+    render(recent, found);
     show("app");
     listen();
   } catch (e) {
@@ -223,5 +237,17 @@ document.addEventListener("visibilitychange", () => {
   if (!document.hidden && !$("app").hidden) load();
 });
 // Keep the "x min ago" labels fresh.
-setInterval(() => lastData && !$("app").hidden && render(lastData), 60000);
+setInterval(() => lastData && !$("app").hidden && render(lastData, lastFound), 60000);
+
+let searchTimer;
+$("search").addEventListener("input", () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(load, 150);
+});
+$("search").addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape") {
+    $("search").value = "";
+    load();
+  }
+});
 start();

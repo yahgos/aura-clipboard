@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use aura_net::enroll::RateLimiter;
 use aura_node::{Content, EntryId, NodeHandle, Status};
-use axum::extract::{ConnectInfo, DefaultBodyLimit, Path, State};
+use axum::extract::{ConnectInfo, DefaultBodyLimit, Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
@@ -222,7 +222,7 @@ async fn logout() -> Response {
 #[derive(Serialize)]
 struct Item {
     id: String,
-    kind: &'static str,
+    kind: String,
     /// Full text for text and HTML entries.
     text: Option<String>,
     width: Option<u32>,
@@ -230,6 +230,18 @@ struct Item {
     size: usize,
     origin: String,
     at_ms: u64,
+    /// For search results: context around the match, split into highlighted parts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    snippet: Option<Vec<aura_node::SnippetPart>>,
+}
+
+/// Newest entries sent without a search; the full history can be 500 entries.
+const RECENT_LIMIT: usize = 50;
+const SEARCH_LIMIT: usize = 50;
+
+#[derive(Deserialize)]
+struct HistoryQuery {
+    q: Option<String>,
 }
 
 fn origin_name(status: &Status, origin: &aura_node::DeviceId) -> String {
@@ -242,12 +254,50 @@ fn origin_name(status: &Status, origin: &aura_node::DeviceId) -> String {
         .unwrap_or_else(|| origin.short())
 }
 
-async fn history(State(state): State<AppState>, headers: HeaderMap) -> Result<Response, ApiError> {
+async fn history(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<HistoryQuery>,
+) -> Result<Response, ApiError> {
     let cookie = authorize(&state, &headers).await?;
     let status = state.node.status();
+    let query = params.q.as_deref().map(str::trim).unwrap_or("");
+    let items: Vec<Item> = if !query.is_empty() {
+        state
+            .node
+            .search(query, SEARCH_LIMIT)
+            .await
+            .map_err(unavailable)?
+            .into_iter()
+            .map(|r| Item {
+                size: r.text.as_ref().map_or(0, |t| t.len()),
+                id: r.id,
+                kind: r.kind,
+                text: r.text,
+                width: r.width,
+                height: r.height,
+                origin: r.origin,
+                at_ms: r.at_ms,
+                snippet: Some(r.snippet),
+            })
+            .collect()
+    } else {
+        recent_items(&state, &status).await?
+    };
+    let body = serde_json::json!({
+        "group": status.group.map(|g| g.name),
+        "served_by": status.device_name,
+        "query": query,
+        "items": items,
+    });
+    Ok(([(header::SET_COOKIE, cookie)], Json(body)).into_response())
+}
+
+async fn recent_items(state: &AppState, status: &Status) -> Result<Vec<Item>, ApiError> {
     let entries = state.node.entries().await.map_err(unavailable)?;
-    let items: Vec<Item> = entries
+    Ok(entries
         .iter()
+        .take(RECENT_LIMIT)
         .map(|e| {
             let (text, width, height) = match &e.content {
                 Content::Text(t) | Content::Html { text: t, .. } => (Some(t.clone()), None, None),
@@ -255,22 +305,17 @@ async fn history(State(state): State<AppState>, headers: HeaderMap) -> Result<Re
             };
             Item {
                 id: e.id.to_hex(),
-                kind: e.content.kind(),
+                kind: e.content.kind().to_string(),
                 text,
                 width,
                 height,
                 size: e.content.size(),
-                origin: origin_name(&status, &e.id.origin),
+                origin: origin_name(status, &e.id.origin),
                 at_ms: e.id.hlc.wall_ms,
+                snippet: None,
             }
         })
-        .collect();
-    let body = serde_json::json!({
-        "group": status.group.map(|g| g.name),
-        "served_by": status.device_name,
-        "items": items,
-    });
-    Ok(([(header::SET_COOKIE, cookie)], Json(body)).into_response())
+        .collect())
 }
 
 async fn image(

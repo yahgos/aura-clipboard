@@ -383,3 +383,68 @@ async fn page_answers_over_ipv6_and_ipv4() {
         assert_eq!(res.status(), StatusCode::OK, "over {ip}");
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn phone_can_search_and_recent_list_is_capped() {
+    let (a, _b) = pair().await;
+    for i in 0..60 {
+        a.handle
+            .publish(aura_node::Content::Text(format!("note number {i}")))
+            .await
+            .unwrap();
+    }
+    a.handle
+        .publish(aura_node::Content::Text("cargo test -p aura-web".into()))
+        .await
+        .unwrap();
+    let server = WebServer::start(a.handle.clone(), 0).await.unwrap();
+    let client = phone(&a.handle).await;
+    assert_eq!(login(&client, &server, PASS).await, StatusCode::OK);
+
+    let (_, recent) = history(&client, &server).await;
+    assert_eq!(
+        recent["items"].as_array().unwrap().len(),
+        50,
+        "only the newest 50 without a search"
+    );
+
+    let found: Value = client
+        .get(url(&server, "/api/history"))
+        .query(&[("q", "cgtst")])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(found["query"], "cgtst");
+    let items = found["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["text"], "cargo test -p aura-web");
+    let lit: String = items[0]["snippet"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|p| p["hit"] == true)
+        .map(|p| p["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(lit, "cgtst");
+
+    // Older entries beyond the recent list are still searchable.
+    let found: Value = client
+        .get(url(&server, "/api/history"))
+        .query(&[("q", "number 3")])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        found["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["text"] == "note number 3")
+    );
+}

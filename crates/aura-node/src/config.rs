@@ -31,7 +31,13 @@ pub struct Config {
     /// Take part in the election of the PC that serves the phone page.
     pub web_enabled: bool,
     pub web_port: u16,
+    /// Version of this file's defaults, for one-time migrations.
+    pub config_version: u32,
 }
+
+const CONFIG_VERSION: u32 = 2;
+/// The history length before search existed; raised to [`Config::default`]'s.
+const OLD_DEFAULT_HISTORY: usize = 50;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -49,7 +55,7 @@ impl Default for Config {
             static_peers: Vec::new(),
             poll_interval_ms: 250,
             max_entry_bytes: 32 * 1024 * 1024,
-            history_entries: 50,
+            history_entries: 500,
             history_bytes: 100 * 1024 * 1024,
             // Debug builds get a new code signature on every build, which makes macOS
             // ask for keychain access each time; use a file while developing. Without a
@@ -61,6 +67,7 @@ impl Default for Config {
             },
             web_enabled: true,
             web_port: DEFAULT_WEB_PORT,
+            config_version: CONFIG_VERSION,
         }
     }
 }
@@ -81,7 +88,19 @@ impl Config {
         let path = dir.join("config.toml");
         if path.exists() {
             let text = std::fs::read_to_string(&path)?;
-            return toml::from_str(&text).with_context(|| format!("parsing {}", path.display()));
+            let mut cfg: Self =
+                toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+            let table: toml::Table = toml::from_str(&text)?;
+            if !table.contains_key("config_version") {
+                // Written before search existed: a still-default history length of 50 is
+                // raised so search reaches further back. A value the user set is kept.
+                if cfg.history_entries == OLD_DEFAULT_HISTORY {
+                    cfg.history_entries = Self::default().history_entries;
+                }
+                cfg.config_version = CONFIG_VERSION;
+                cfg.save(dir)?;
+            }
+            return Ok(cfg);
         }
         let cfg = Self::default();
         std::fs::create_dir_all(dir)?;
@@ -115,5 +134,31 @@ fn hostname() -> Option<String> {
         let name = String::from_utf8(out.stdout).ok()?.trim().to_string();
         let name = name.strip_suffix(".local").unwrap_or(&name).to_string();
         (!name.is_empty()).then_some(name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn load_from(text: &str) -> Config {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.toml"), text).unwrap();
+        let cfg = Config::load_or_init(dir.path()).unwrap();
+        // The migration is saved, so loading again gives the same result.
+        let again = Config::load_or_init(dir.path()).unwrap();
+        assert_eq!(again.history_entries, cfg.history_entries);
+        cfg
+    }
+
+    #[test]
+    fn old_default_history_is_raised_but_custom_values_are_kept() {
+        assert_eq!(load_from("history_entries = 50\n").history_entries, 500);
+        assert_eq!(load_from("history_entries = 120\n").history_entries, 120);
+        assert_eq!(
+            load_from("history_entries = 50\nconfig_version = 2\n").history_entries,
+            50,
+            "a 50 chosen after the migration stays"
+        );
     }
 }
