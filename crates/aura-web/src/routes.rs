@@ -170,7 +170,7 @@ async fn login(
         .limiter
         .lock()
         .unwrap()
-        .allow(peer.ip(), Instant::now())
+        .allow(peer.ip().to_canonical(), Instant::now())
     {
         return Err(ApiError(
             StatusCode::TOO_MANY_REQUESTS,
@@ -188,7 +188,7 @@ async fn login(
             .limiter
             .lock()
             .unwrap()
-            .record_failure(peer.ip(), Instant::now());
+            .record_failure(peer.ip().to_canonical(), Instant::now());
         let msg = if req.qr_token.is_some() {
             "this QR code expired; show a new one on the PC"
         } else {
@@ -196,7 +196,11 @@ async fn login(
         };
         return Err(ApiError(StatusCode::UNAUTHORIZED, msg.into()));
     }
-    state.limiter.lock().unwrap().record_success(peer.ip());
+    state
+        .limiter
+        .lock()
+        .unwrap()
+        .record_success(peer.ip().to_canonical());
     let token = session::issue(&key, Kind::Session, session::now_secs() + SESSION_TTL_SECS);
     Ok((
         [(header::SET_COOKIE, session_cookie(&token, SESSION_TTL_SECS))],

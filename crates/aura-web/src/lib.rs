@@ -31,8 +31,8 @@ pub struct WebServer {
 }
 
 impl WebServer {
-    /// Serves the page on `0.0.0.0:port` (0 picks a free port) with the group's shared
-    /// certificate.
+    /// Serves the page on `port` (0 picks a free port), over both IPv6 and IPv4, with
+    /// the group's shared certificate.
     pub async fn start(node: NodeHandle, port: u16) -> Result<Self> {
         let cert = node
             .web_cert()
@@ -41,8 +41,9 @@ impl WebServer {
         let tls = RustlsConfig::from_config(Arc::new(tls_config(&cert)?));
         let app = routes::router(node).into_make_service_with_connect_info::<SocketAddr>();
         let handle = Handle::new();
-        let server = axum_server::bind_rustls(SocketAddr::from(([0, 0, 0, 0], port)), tls)
-            .handle(handle.clone());
+        let listener = bind_any(port)
+            .with_context(|| format!("the phone page could not listen on port {port}"))?;
+        let server = axum_server::from_tcp_rustls(listener, tls)?.handle(handle.clone());
         tokio::spawn(async move {
             if let Err(e) = server.serve(app).await {
                 tracing::warn!("phone page server stopped: {e}");
@@ -68,6 +69,40 @@ impl Drop for WebServer {
     fn drop(&mut self) {
         self.handle.graceful_shutdown(Some(Duration::from_secs(1)));
     }
+}
+
+/// Binds `[::]:port` as a dual-stack socket, so phones that resolve `aura.local` to
+/// one of the PC's IPv6 addresses (and prefer it, as phones do) can connect, as well as
+/// IPv4 ones. Falls back to IPv4 only on systems without IPv6.
+fn bind_any(port: u16) -> std::io::Result<std::net::TcpListener> {
+    use socket2::{Domain, Protocol, Socket, Type};
+    let open = |domain: Domain, addr: SocketAddr| -> std::io::Result<Socket> {
+        let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
+        if domain == Domain::IPV6 {
+            // Windows defaults to IPv6-only; make the socket take IPv4 too everywhere.
+            socket.set_only_v6(false)?;
+        }
+        #[cfg(unix)]
+        socket.set_reuse_address(true)?;
+        socket.bind(&addr.into())?;
+        socket.listen(1024)?;
+        socket.set_nonblocking(true)?;
+        Ok(socket)
+    };
+    let socket = match open(
+        Domain::IPV6,
+        SocketAddr::from((std::net::Ipv6Addr::UNSPECIFIED, port)),
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::debug!("no IPv6 for the phone page ({e}); using IPv4 only");
+            open(
+                Domain::IPV4,
+                SocketAddr::from((std::net::Ipv4Addr::UNSPECIFIED, port)),
+            )?
+        }
+    };
+    Ok(socket.into())
 }
 
 fn tls_config(cert: &WebCert) -> Result<rustls::ServerConfig> {
