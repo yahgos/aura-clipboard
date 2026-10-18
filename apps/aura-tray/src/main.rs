@@ -408,14 +408,19 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("building the Tauri app");
 
-    app.run(|app, event| match event {
-        RunEvent::ExitRequested {
-            api, code: None, ..
-        } => api.prevent_exit(),
-        // Opening Aura again from Finder, Spotlight or Launchpad doesn't start a second
-        // copy on macOS; the running one gets a reopen event instead.
-        #[cfg(target_os = "macos")]
-        RunEvent::Reopen { .. } => show_window(app),
-        _ => {}
+    app.run(|app, event| {
+        // Only macOS uses the handle below (reopen events).
+        #[cfg(not(target_os = "macos"))]
+        let _ = app;
+        match event {
+            RunEvent::ExitRequested {
+                api, code: None, ..
+            } => api.prevent_exit(),
+            // Opening Aura again from Finder, Spotlight or Launchpad doesn't start a second
+            // copy on macOS; the running one gets a reopen event instead.
+            #[cfg(target_os = "macos")]
+            RunEvent::Reopen { .. } => show_window(app),
+            _ => {}
+        }
     });
 }
