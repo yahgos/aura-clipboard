@@ -353,3 +353,33 @@ async fn the_elected_pc_starts_serving_on_its_own() {
     .await;
     assert!(a.handle.status().is_fofoqueiro);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn page_answers_over_ipv6_and_ipv4() {
+    // Phones often get aura.local's IPv6 addresses first, so the page must take both.
+    if std::net::TcpListener::bind("[::1]:0").is_err() {
+        eprintln!("skipping: no IPv6 on this machine");
+        return;
+    }
+    let (a, _b) = pair().await;
+    let server = WebServer::start(a.handle.clone(), 0).await.unwrap();
+    let port = server.local_addr().port();
+    let cert = a.handle.web_cert().await.unwrap().unwrap();
+    for ip in ["::1", "127.0.0.1"] {
+        // Pin "localhost" to one address family; TLS still checks the name.
+        let client = reqwest::Client::builder()
+            .add_root_certificate(reqwest::Certificate::from_pem(cert.cert_pem.as_bytes()).unwrap())
+            .resolve(
+                "localhost",
+                std::net::SocketAddr::new(ip.parse().unwrap(), port),
+            )
+            .build()
+            .unwrap();
+        let res = client
+            .get(format!("https://localhost:{port}/"))
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("no answer over {ip}: {e}"));
+        assert_eq!(res.status(), StatusCode::OK, "over {ip}");
+    }
+}
