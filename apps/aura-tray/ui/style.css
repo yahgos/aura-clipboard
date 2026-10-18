@@ -197,3 +197,62 @@ mark {
   padding: 0 1px;
   font-weight: 600;
 }
+
+/* Gear and back buttons */
+button.icon {
+  margin: 0;
+  padding: 6px;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+}
+button.icon:hover { background: var(--input); color: var(--text); }
+button.icon:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+button.icon svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Settings panel, sliding in from the right */
+.panel {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  overflow-y: auto;
+  transform: translateX(100%);
+  visibility: hidden;
+  transition: transform 0.22s ease, visibility 0s linear 0.22s;
+  z-index: 10;
+}
+.panel.open {
+  transform: none;
+  visibility: visible;
+  transition: transform 0.22s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .panel, .panel.open { transition: none; }
+}
+.panel-head {
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 14px 14px 6px 10px;
+  background: var(--bg);
+  z-index: 1;
+}
+.panel-head h1 { font-size: 17px; margin: 0; }
+.panel-body { padding: 0 14px 18px; }
+.panel-body .card:first-child { margin-top: 6px; }

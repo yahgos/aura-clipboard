@@ -14,6 +14,9 @@
       <p id="device">…</p>
     </div>
     <span id="pill" class="pill">…</span>
+    <button id="settings-btn" class="icon" type="button" title="Settings" aria-label="Settings" hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+    </button>
   </header>
 
   <main>
@@ -44,6 +47,24 @@
     <!-- In a group -->
     <section id="group" hidden>
       <div class="card">
+        <h2>Recent</h2>
+        <input id="search" type="search" placeholder="Search history (typos are fine)" autocomplete="off" spellcheck="false" />
+        <ul id="history" class="list"></ul>
+        <p id="history-empty" class="hint">Copy something on any PC in the group.</p>
+      </div>
+    </section>
+  </main>
+
+  <!-- Settings: slides in from the right over the main screen -->
+  <aside id="settings" class="panel" aria-label="Settings" aria-hidden="true" inert>
+    <div class="panel-head">
+      <button id="settings-back" class="icon" type="button" title="Back" aria-label="Back to the main screen">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+      </button>
+      <h1>Settings</h1>
+    </div>
+    <div class="panel-body">
+      <div class="card">
         <div class="row">
           <h2 id="group-name">Group</h2>
           <label class="switch" title="Pause sync on this PC">
@@ -72,15 +93,8 @@
         </details>
         <button id="leave-btn" class="danger subtle">Leave group</button>
       </div>
-
-      <div class="card">
-        <h2>Recent</h2>
-        <input id="search" type="search" placeholder="Search history (typos are fine)" autocomplete="off" spellcheck="false" />
-        <ul id="history" class="list"></ul>
-        <p id="history-empty" class="hint">Copy something on any PC in the group.</p>
-      </div>
-    </section>
-  </main>
+    </div>
+  </aside>
 
   <div id="toast" role="status" aria-live="polite"></div>
   <script src="app.js"></script>
