@@ -17,6 +17,9 @@ use tauri_plugin_autostart::{MacosLauncher, ManagerExt as _};
 use tauri_plugin_notification::NotificationExt as _;
 
 const TRAY_ID: &str = "aura";
+/// Passed by the login item, so a start at login stays in the menu bar while any
+/// launch by the user opens the window.
+const AUTOSTART_ARG: &str = "--autostart";
 const RECENT_IN_MENU: usize = 10;
 
 type CmdResult<T = ()> = Result<T, String>;
@@ -111,6 +114,9 @@ async fn recopy(node: State<'_, NodeHandle>, id: String) -> CmdResult {
 // ------------------------------------------------------------------ window
 
 fn show_window(app: &AppHandle) {
+    // Aura has no Dock icon, so macOS would leave its window behind the active app.
+    #[cfg(target_os = "macos")]
+    let _ = app.show();
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
         let _ = w.unminimize();
@@ -326,7 +332,7 @@ fn main() {
         }))
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
-            None,
+            Some(vec![AUTOSTART_ARG]),
         ))
         .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
@@ -361,7 +367,8 @@ fn main() {
             let handle = app.handle().clone();
             let status = node.status();
             build_tray(&handle, &status)?;
-            if status.group.is_none() {
+            let started_at_login = std::env::args().any(|a| a == AUTOSTART_ARG);
+            if status.group.is_none() || !started_at_login {
                 show_window(&handle);
             }
 
@@ -401,12 +408,19 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("building the Tauri app");
 
-    app.run(|_app, event| {
-        if let RunEvent::ExitRequested {
-            api, code: None, ..
-        } = event
-        {
-            api.prevent_exit();
+    app.run(|app, event| {
+        // Only macOS uses the handle below (reopen events).
+        #[cfg(not(target_os = "macos"))]
+        let _ = app;
+        match event {
+            RunEvent::ExitRequested {
+                api, code: None, ..
+            } => api.prevent_exit(),
+            // Opening Aura again from Finder, Spotlight or Launchpad doesn't start a second
+            // copy on macOS; the running one gets a reopen event instead.
+            #[cfg(target_os = "macos")]
+            RunEvent::Reopen { .. } => show_window(app),
+            _ => {}
         }
     });
 }
