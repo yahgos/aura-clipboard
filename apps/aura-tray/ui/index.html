@@ -53,6 +53,16 @@
         </div>
         <ul id="members" class="list"></ul>
         <p class="hint">To add a PC, open Aura on it and join with the group passphrase.</p>
+        <div class="phone">
+          <h3>Phone</h3>
+          <p class="hint" id="phone-info"></p>
+          <button id="phone-qr-btn" class="small">Show QR code</button>
+          <div id="phone-qr" hidden>
+            <div id="qr-svg"></div>
+            <p class="hint">Scan it with your phone's camera to open the page already logged in. The code works for 10 minutes.</p>
+          </div>
+          <label class="check"><input type="checkbox" id="web-enabled" /> Allow this PC to serve the phone page</label>
+        </div>
         <details id="rotate">
           <summary>Change passphrase</summary>
           <p class="hint" id="rotate-info">PCs already in the group stay in. New PCs will need the new passphrase.</p>

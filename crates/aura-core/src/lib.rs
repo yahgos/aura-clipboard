@@ -17,4 +17,4 @@ pub use id::{DeviceId, GroupId};
 pub use membership::{Member, Membership};
 
 /// Wire protocol version. Bumped on any incompatible change.
-pub const PROTOCOL_VERSION: u16 = 1;
+pub const PROTOCOL_VERSION: u16 = 2;

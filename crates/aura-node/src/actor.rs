@@ -14,7 +14,7 @@ use aura_core::{
 };
 use aura_net::discovery::{Advert, Discovered, Discovery, DiscoveryEvent};
 use aura_net::enroll::{self, JoinAuthority, JoinError, RateLimiter};
-use aura_net::proto::{GroupKey, Hello, JoinInfo, KeyVersion, Msg, Preamble, Welcome};
+use aura_net::proto::{GroupKey, Hello, JoinInfo, KeyVersion, Msg, Preamble, WebCert, Welcome};
 use aura_net::{Identity, Incoming, Session, session};
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
@@ -34,6 +34,8 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(45);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
 const PEER_QUEUE: usize = 64;
 const STATUS_HISTORY: usize = 20;
+/// How long a PC must be the election winner before it starts serving the phone page.
+const WEB_TAKEOVER: Duration = Duration::from_secs(3);
 
 pub(crate) enum ActorMsg {
     Cmd(Command),
@@ -71,7 +73,7 @@ pub(crate) enum Internal {
         reply: oneshot::Sender<Result<Welcome>>,
     },
     JoinFinished {
-        result: Result<(Welcome, [u8; 32], SocketAddr), JoinError>,
+        result: Result<(Box<Welcome>, [u8; 32], SocketAddr), JoinError>,
         reply: Reply,
     },
     JoinRejected(SocketAddr),
@@ -85,11 +87,14 @@ struct Peer {
     /// Who opened this TCP connection; used to break ties between duplicate connections.
     dialer: DeviceId,
     addr: SocketAddr,
+    /// Whether the peer takes part in the phone-page election (from its Hello).
+    serves_web: bool,
 }
 
 struct Group {
     info: GroupInfo,
     key: GroupKey,
+    web_cert: Option<WebCert>,
     membership: Membership,
 }
 
@@ -119,6 +124,10 @@ pub(crate) struct Actor {
     listen_port: u16,
     lan_ip: Option<IpAddr>,
     tasks: Vec<JoinHandle<()>>,
+    data_dir: std::path::PathBuf,
+    /// When this PC became the phone-page election winner.
+    web_since: Option<Instant>,
+    is_fofoqueiro: bool,
 }
 
 pub(crate) struct ActorParts {
@@ -131,6 +140,7 @@ pub(crate) struct ActorParts {
     pub status_tx: watch::Sender<Status>,
     pub events_tx: broadcast::Sender<Event>,
     pub listener: TcpListener,
+    pub data_dir: std::path::PathBuf,
 }
 
 fn now_ms() -> u64 {
@@ -154,6 +164,7 @@ impl Actor {
                     version: p.store.key_version()?,
                     password_key,
                 },
+                web_cert: p.secrets.web_cert.clone(),
                 membership: p.store.membership()?,
             }),
             (Some(info), None) => {
@@ -196,6 +207,9 @@ impl Actor {
             listen_port,
             lan_ip: crate::lan_ip(),
             tasks: Vec::new(),
+            data_dir: p.data_dir,
+            web_since: None,
+            is_fofoqueiro: false,
         };
 
         actor
@@ -248,6 +262,7 @@ impl Actor {
                 ActorMsg::Cmd(cmd) => self.on_command(cmd).await,
                 ActorMsg::Int(int) => self.on_internal(int).await,
             }
+            self.update_web_role();
             self.publish_status();
         }
         for t in self.tasks.drain(..) {
@@ -342,6 +357,46 @@ impl Actor {
                 };
                 let _ = reply.send(res);
             }
+            Command::Entries { reply } => {
+                let _ = reply.send(Ok(self.history.iter_newest().cloned().collect()));
+            }
+            Command::Entry { id, reply } => {
+                let _ = reply.send(Ok(self.history.get(&id).cloned()));
+            }
+            Command::WebSecrets { reply } => {
+                let res = match &self.group {
+                    Some(g) => Ok(crate::api::WebSecrets {
+                        group_id: g.info.id,
+                        password_key: g.key.password_key,
+                        web_cert: g.web_cert.clone(),
+                    }),
+                    None => Err(anyhow!("not in a group")),
+                };
+                let _ = reply.send(res);
+            }
+            Command::Publish { content, reply } => {
+                let res = if self.group.is_none() {
+                    Err(anyhow!("not in a group"))
+                } else if self.paused {
+                    Err(anyhow!("sync is paused on this PC"))
+                } else if content.size() > self.cfg.max_entry_bytes {
+                    Err(anyhow!("too large"))
+                } else {
+                    self.write_clipboard(content.clone());
+                    self.commit_local(content);
+                    Ok(())
+                };
+                let _ = reply.send(res);
+            }
+            Command::SetWebEnabled(enabled) => {
+                if self.cfg.web_enabled != enabled {
+                    self.cfg.web_enabled = enabled;
+                    if let Err(e) = self.cfg.save(&self.data_dir) {
+                        self.warn(format!("saving config: {e:#}"));
+                    }
+                    self.broadcast(encode(&Msg::WebCapable(enabled)), None);
+                }
+            }
             Command::AddPeer(addr) => {
                 self.static_peers.insert(addr);
                 self.backoff.remove(&addr);
@@ -364,6 +419,7 @@ impl Actor {
         let mut membership = Membership::new();
         membership.add(self.self_member(self.me()));
         let version = self.new_key_version();
+        let web_cert = crate::webcert::generate(self.new_key_version())?;
         self.set_group(Group {
             info: GroupInfo {
                 id: group_id,
@@ -373,6 +429,7 @@ impl Actor {
                 version,
                 password_key,
             },
+            web_cert: Some(web_cert),
             membership,
         })?;
         self.emit(Event::GroupJoined { name });
@@ -409,6 +466,91 @@ impl Actor {
         self.store.set_key_version(key.version)?;
         self.secrets.password_key = Some(key.password_key);
         self.secret_store.save(&self.secrets)
+    }
+
+    /// Takes `cert` if it is newer than ours: persists and gossips it (except back to
+    /// `from`). Returns whether it was adopted.
+    fn adopt_web_cert(&mut self, cert: WebCert, from: Option<DeviceId>) -> bool {
+        let Some(g) = &mut self.group else {
+            return false;
+        };
+        if g.web_cert
+            .as_ref()
+            .is_some_and(|c| c.version >= cert.version)
+        {
+            return false;
+        }
+        g.web_cert = Some(cert.clone());
+        self.secrets.web_cert = Some(cert.clone());
+        if let Err(e) = self.secret_store.save(&self.secrets) {
+            self.warn(format!("saving the phone-page certificate: {e:#}"));
+        }
+        self.clock.observe(cert.version.hlc, now_ms());
+        self.broadcast(encode(&Msg::WebCert(cert)), from);
+        true
+    }
+
+    /// Makes sure the group has a phone-page certificate that is not about to expire.
+    fn ensure_web_cert(&mut self) {
+        let renew_after = now_ms() + crate::webcert::RENEW_BEFORE_MS;
+        let needs_new = match self.group.as_ref() {
+            None => return,
+            Some(g) => g
+                .web_cert
+                .as_ref()
+                .is_none_or(|c| c.expires_ms < renew_after),
+        };
+        if needs_new {
+            let version = self.new_key_version();
+            match crate::webcert::generate(version) {
+                Ok(cert) => {
+                    self.adopt_web_cert(cert, None);
+                }
+                Err(e) => self.warn(format!("creating the phone-page certificate: {e:#}")),
+            }
+        }
+    }
+
+    /// The phone-page election: the lowest device id among this PC and its connected
+    /// peers that take part. Every PC in the mesh computes the same winner.
+    fn web_winner(&self) -> Option<DeviceId> {
+        self.group.as_ref()?;
+        let me = self.me();
+        self.peers
+            .iter()
+            .filter(|(_, p)| p.serves_web)
+            .map(|(id, _)| *id)
+            .chain(self.cfg.web_enabled.then_some(me))
+            .min()
+    }
+
+    fn update_web_role(&mut self) {
+        let me = self.me();
+        let serve = if self.web_winner() == Some(me) {
+            let since = *self.web_since.get_or_insert_with(Instant::now);
+            self.is_fofoqueiro || since.elapsed() >= WEB_TAKEOVER
+        } else {
+            self.web_since = None;
+            false
+        };
+        if serve == self.is_fofoqueiro {
+            return;
+        }
+        if serve {
+            self.ensure_web_cert();
+        }
+        self.is_fofoqueiro = serve;
+        self.advertise_web();
+        self.emit(Event::PhonePage { serving: serve });
+    }
+
+    fn advertise_web(&mut self) {
+        let port = self.is_fofoqueiro.then_some(self.cfg.web_port);
+        if let Some(d) = &mut self.discovery
+            && let Err(e) = d.advertise_web(port)
+        {
+            tracing::warn!("mDNS aura.local advertise failed: {e:#}");
+        }
     }
 
     /// Changes the group passphrase and gossips the new key to every member.
@@ -482,7 +624,7 @@ impl Actor {
             for addr in addrs {
                 result = enroll::join(addr, &identity, &passphrase, info.clone())
                     .await
-                    .map(|(welcome, pk)| (welcome, pk, addr));
+                    .map(|(welcome, pk)| (Box::new(welcome), pk, addr));
                 match &result {
                     Ok(_) | Err(JoinError::WrongPassphrase) | Err(JoinError::Refused(_)) => break,
                     Err(JoinError::Other(e)) => tracing::debug!("join via {addr} failed: {e:#}"),
@@ -519,6 +661,7 @@ impl Actor {
                 name: welcome.group_name,
             },
             key: welcome.key,
+            web_cert: welcome.web_cert,
             membership: welcome.membership,
         })?;
         self.emit(Event::GroupJoined { name });
@@ -554,6 +697,7 @@ impl Actor {
             self.secrets = Secrets {
                 identity: Identity::generate()?,
                 password_key: None,
+                web_cert: None,
             };
             self.secret_store.save(&self.secrets)?;
             *self.identity.write().unwrap() = self.secrets.identity.clone();
@@ -619,7 +763,7 @@ impl Actor {
             }
             Internal::JoinFinished { result, reply } => {
                 let res = match result {
-                    Ok((welcome, pk, addr)) => self.on_welcome(welcome, pk, addr),
+                    Ok((welcome, pk, addr)) => self.on_welcome(*welcome, pk, addr),
                     Err(e) => Err(e.into()),
                 };
                 let _ = reply.send(res);
@@ -815,6 +959,7 @@ impl Actor {
                 tx: ptx,
                 dialer,
                 addr,
+                serves_web: false,
             },
         );
         let hello = Msg::Hello(Hello {
@@ -831,6 +976,12 @@ impl Actor {
                 .as_ref()
                 .map(|g| g.key.version)
                 .unwrap_or_default(),
+            serves_web: self.cfg.web_enabled,
+            web_cert_version: self
+                .group
+                .as_ref()
+                .and_then(|g| g.web_cert.as_ref())
+                .map(|c| c.version),
         });
         self.send_to(remote, encode(&hello));
         if !replacing {
@@ -862,11 +1013,27 @@ impl Actor {
                     let bytes = encode(&Msg::GroupKey(g.key.clone()));
                     self.send_to(peer, bytes);
                 }
+                if let Some(cert) = self.group.as_ref().and_then(|g| g.web_cert.clone())
+                    && hello.web_cert_version.is_none_or(|v| cert.version > v)
+                {
+                    self.send_to(peer, encode(&Msg::WebCert(cert)));
+                }
+                if let Some(p) = self.peers.get_mut(&peer) {
+                    p.serves_web = hello.serves_web;
+                }
             }
             Msg::Entry(entry) => self.on_remote_entry(peer, entry),
             Msg::Membership(m) => self.update_membership(Some(peer), |mine| mine.merge(&m)),
             Msg::GroupKey(key) => {
                 self.adopt_key(key, Some(peer));
+            }
+            Msg::WebCert(cert) => {
+                self.adopt_web_cert(cert, Some(peer));
+            }
+            Msg::WebCapable(on) => {
+                if let Some(p) = self.peers.get_mut(&peer) {
+                    p.serves_web = on;
+                }
             }
             Msg::Ping => {}
         }
@@ -964,6 +1131,7 @@ impl Actor {
             group_id: g.info.id,
             group_name: g.info.name.clone(),
             key: g.key.clone(),
+            web_cert: g.web_cert.clone(),
             membership: g.membership.clone(),
             addr_hints,
         })
@@ -1162,6 +1330,22 @@ impl Actor {
             paused: self.paused,
             history,
             discovered_groups: groups.into_values().collect(),
+            web_enabled: self.cfg.web_enabled,
+            web_port: self.cfg.web_port,
+            fofoqueiro: self.web_winner().map(|id| self.member_name(&id)),
+            fofoqueiro_ip: self.web_winner().and_then(|id| {
+                if id == me {
+                    self.lan_ip.map(|ip| ip.to_string())
+                } else {
+                    self.peers.get(&id).map(|p| p.addr.ip().to_string())
+                }
+            }),
+            is_fofoqueiro: self.is_fofoqueiro,
+            web_cert_expires_ms: self
+                .group
+                .as_ref()
+                .and_then(|g| g.web_cert.as_ref())
+                .map(|c| c.expires_ms),
         }
     }
 }

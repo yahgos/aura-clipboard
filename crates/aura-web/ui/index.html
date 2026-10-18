@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="light dark" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="Aura" />
+  <title>Aura Clipboard</title>
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" href="/icon-192.png" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header>
+    <div class="logo" aria-hidden="true"><span></span><span></span></div>
+    <div class="title">
+      <h1>Aura Clipboard</h1>
+      <p id="where">Shared clipboard</p>
+    </div>
+    <span id="live" class="pill" hidden>Live</span>
+  </header>
+
+  <main>
+    <section id="login" hidden>
+      <form id="login-form" class="card">
+        <h2>Log in</h2>
+        <p class="hint">Type your group passphrase, or scan the QR code in Aura on one of your PCs.</p>
+        <label>Passphrase
+          <input id="pass" type="password" autocomplete="current-password" required />
+        </label>
+        <button class="primary" type="submit">Log in</button>
+      </form>
+    </section>
+
+    <section id="app" hidden>
+      <div class="card current">
+        <div class="row">
+          <h2>Current clipboard</h2>
+          <span id="current-meta" class="meta"></span>
+        </div>
+        <div id="current"></div>
+      </div>
+
+      <form id="send-form" class="card">
+        <h2>Send to PCs</h2>
+        <textarea id="send-text" rows="3" placeholder="Paste or type here"></textarea>
+        <button class="primary" type="submit">Send</button>
+      </form>
+
+      <div class="card">
+        <h2>Recent</h2>
+        <ul id="history" class="list"></ul>
+        <p id="history-empty" class="hint" hidden>Nothing else yet.</p>
+      </div>
+
+      <p class="footer"><button id="logout" class="link" type="button">Log out</button></p>
+    </section>
+  </main>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script src="/app.js"></script>
+</body>
+</html>

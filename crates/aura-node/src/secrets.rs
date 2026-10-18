@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use aura_net::Identity;
+use aura_net::proto::WebCert;
 use serde::{Deserialize, Serialize};
 
 use crate::config::SecretStoreKind;
@@ -14,6 +15,26 @@ use crate::config::SecretStoreKind;
 pub struct Secrets {
     pub identity: Identity,
     pub password_key: Option<[u8; 32]>,
+    pub web_cert: Option<WebCert>,
+}
+
+/// Layout written before the phone page existed; still readable.
+#[derive(Deserialize)]
+struct SecretsV1 {
+    identity: Identity,
+    password_key: Option<[u8; 32]>,
+}
+
+fn decode(bytes: &[u8]) -> Result<Secrets> {
+    if let Ok(s) = postcard::from_bytes::<Secrets>(bytes) {
+        return Ok(s);
+    }
+    let v1: SecretsV1 = postcard::from_bytes(bytes).context("corrupt secrets")?;
+    Ok(Secrets {
+        identity: v1.identity,
+        password_key: v1.password_key,
+        web_cert: None,
+    })
 }
 
 pub struct SecretStore {
@@ -45,11 +66,12 @@ impl SecretStore {
     /// Loads the secrets, creating a fresh identity on first run.
     pub fn load_or_create(&self) -> Result<Secrets> {
         if let Some(bytes) = self.read()? {
-            return postcard::from_bytes(&bytes).context("corrupt secrets");
+            return decode(&bytes);
         }
         let secrets = Secrets {
             identity: Identity::generate()?,
             password_key: None,
+            web_cert: None,
         };
         self.save(&secrets)?;
         Ok(secrets)

@@ -415,3 +415,92 @@ async fn concurrent_rotations_converge() {
         .await
         .unwrap();
 }
+
+/// (fofoqueiro name as each node sees it, whether the node serves).
+fn web_view(n: &TestNode) -> (Option<String>, bool) {
+    let s = n.handle.status();
+    (s.fofoqueiro, s.is_fofoqueiro)
+}
+
+/// The node with the lowest device id among `nodes`.
+fn lowest<'a>(nodes: &[&'a TestNode]) -> &'a TestNode {
+    nodes
+        .iter()
+        .min_by_key(|n| n.handle.status().device_id)
+        .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn phone_page_is_served_by_one_elected_pc_with_failover() {
+    let (a, b, c) = trio().await;
+    let winner = lowest(&[&a, &b, &c]).name.clone();
+    eventually("everyone agrees and exactly one serves", || {
+        let views = [web_view(&a), web_view(&b), web_view(&c)];
+        views
+            .iter()
+            .all(|(f, _)| f.as_deref() == Some(winner.as_str()))
+            && views.iter().filter(|(_, serving)| *serving).count() == 1
+    })
+    .await;
+
+    // Stop the fofoqueiro: the next-lowest PC takes over.
+    let (mut gone, rest): (Vec<TestNode>, Vec<TestNode>) =
+        [a, b, c].into_iter().partition(|n| n.name == winner);
+    gone.pop().unwrap().handle.shutdown().await;
+    let next = lowest(&[&rest[0], &rest[1]]).name.clone();
+    eventually("the next PC takes over", || {
+        let views = [web_view(&rest[0]), web_view(&rest[1])];
+        views
+            .iter()
+            .all(|(f, _)| f.as_deref() == Some(next.as_str()))
+            && views.iter().filter(|(_, serving)| *serving).count() == 1
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn opted_out_pc_is_never_elected() {
+    let (a, b, c) = trio().await;
+    let nodes = [&a, &b, &c];
+    let first = lowest(&nodes);
+    first.handle.set_web_enabled(false).await.unwrap();
+    let others: Vec<&TestNode> = nodes.into_iter().filter(|n| n.name != first.name).collect();
+    let next = lowest(&others).name.clone();
+    eventually("the opted-out PC is skipped", || {
+        [&a, &b, &c]
+            .iter()
+            .all(|n| web_view(n).0.as_deref() == Some(next.as_str()))
+            && !web_view(first).1
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn every_member_shares_the_phone_page_certificate() {
+    let (a, b, c) = trio().await;
+    let cert = a
+        .handle
+        .web_cert()
+        .await
+        .unwrap()
+        .expect("created with the group");
+    assert!(cert.cert_pem.contains("BEGIN CERTIFICATE"));
+    for n in [&b, &c] {
+        assert_eq!(
+            n.handle.web_cert().await.unwrap(),
+            Some(cert.clone()),
+            "{}",
+            n.name
+        );
+    }
+    // Session keys match too, so a phone login works on whichever PC serves.
+    let k = a.handle.web_session_key().await.unwrap();
+    assert_eq!(b.handle.web_session_key().await.unwrap(), k);
+    assert!(a.handle.verify_passphrase(PASS).await.unwrap());
+    assert!(
+        !a.handle
+            .verify_passphrase("wrong passphrase")
+            .await
+            .unwrap()
+    );
+}

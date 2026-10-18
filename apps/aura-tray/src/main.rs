@@ -56,6 +56,30 @@ async fn join_group(
     node.join(target, &passphrase).await.map_err(err)
 }
 
+#[derive(serde::Serialize)]
+struct PhoneQr {
+    url: String,
+    svg: String,
+}
+
+/// A fresh QR code that opens the phone page and logs the phone in (valid 10 minutes).
+#[tauri::command]
+async fn phone_qr(node: State<'_, NodeHandle>) -> CmdResult<PhoneQr> {
+    let port = node.status().web_port;
+    let url = aura_web::qr_login_url(&node, aura_web::WEB_HOST, port)
+        .await
+        .map_err(err)?;
+    let svg = aura_web::qr_svg(&url).map_err(err)?;
+    // The token stays in the QR code; the window only shows the plain address.
+    let plain = format!("https://{}:{port}", aura_web::WEB_HOST);
+    Ok(PhoneQr { url: plain, svg })
+}
+
+#[tauri::command]
+async fn set_web_enabled(node: State<'_, NodeHandle>, enabled: bool) -> CmdResult {
+    node.set_web_enabled(enabled).await.map_err(err)
+}
+
 #[tauri::command]
 async fn rotate_passphrase(node: State<'_, NodeHandle>, passphrase: String) -> CmdResult {
     node.rotate_passphrase(&passphrase).await.map_err(err)
@@ -310,6 +334,8 @@ fn main() {
             create_group,
             join_group,
             rotate_passphrase,
+            phone_qr,
+            set_web_enabled,
             leave_group,
             remove_device,
             set_paused,
@@ -329,6 +355,8 @@ fn main() {
                 aura_node::system_clipboard(),
             ))?;
             app.manage(node.clone());
+            // Serves the phone page whenever this PC is elected to.
+            tauri::async_runtime::spawn(aura_web::supervise(node.clone()));
 
             let handle = app.handle().clone();
             let status = node.status();

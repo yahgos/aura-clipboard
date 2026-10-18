@@ -44,7 +44,7 @@ pub struct JoinInfo {
 /// Listener → joiner, encrypted.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum JoinResult {
-    Welcome(Welcome),
+    Welcome(Box<Welcome>),
     Refused(String),
 }
 
@@ -73,12 +73,33 @@ impl std::fmt::Debug for GroupKey {
     }
 }
 
+/// The HTTPS certificate every member uses for the phone page (`aura.local`).
+/// Shared so a phone that accepted it once is not warned again when a different
+/// PC takes over serving. Debug output is redacted.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebCert {
+    pub version: KeyVersion,
+    pub expires_ms: u64,
+    pub cert_pem: String,
+    pub key_pem: String,
+}
+
+impl std::fmt::Debug for WebCert {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WebCert")
+            .field("version", &self.version)
+            .field("expires_ms", &self.expires_ms)
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Welcome {
     pub group_id: GroupId,
     pub group_name: String,
     /// Current password key, so the new member can admit others too.
     pub key: GroupKey,
+    pub web_cert: Option<WebCert>,
     pub membership: Membership,
     /// Known addresses of other members, for networks where mDNS does not work.
     pub addr_hints: Vec<(DeviceId, SocketAddr)>,
@@ -105,6 +126,10 @@ pub enum Msg {
     Membership(Membership),
     /// The group passphrase was changed (gossip; highest version wins).
     GroupKey(GroupKey),
+    /// The shared phone-page certificate was created or renewed (gossip; highest version wins).
+    WebCert(WebCert),
+    /// The sender started or stopped taking part in the phone-page election.
+    WebCapable(bool),
     /// Keepalive, so dead connections are noticed after sleep/wake.
     Ping,
 }
@@ -118,4 +143,8 @@ pub struct Hello {
     pub head: Option<EntryId>,
     /// Version of the sender's password key, so stale peers get the newer one.
     pub key_version: KeyVersion,
+    /// Whether the sender may serve the phone page.
+    pub serves_web: bool,
+    /// Version of the sender's phone-page certificate, so stale peers get the newer one.
+    pub web_cert_version: Option<KeyVersion>,
 }

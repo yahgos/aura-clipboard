@@ -21,6 +21,8 @@ redb.workspace = true
 directories.workspace = true
 toml.workspace = true
 keyring.workspace = true
+rcgen = { version = "0.14", default-features = false, features = ["ring", "pem", "crypto"] }
+time = "0.3"
 
 [dev-dependencies]
 tempfile.workspace = true
