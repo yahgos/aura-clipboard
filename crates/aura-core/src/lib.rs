@@ -9,12 +9,14 @@ pub mod history;
 pub mod hlc;
 pub mod id;
 pub mod membership;
+pub mod search;
 
 pub use entry::{Content, Entry, EntryId, EntryMeta};
 pub use history::{History, InsertOutcome};
 pub use hlc::{Hlc, HlcClock};
 pub use id::{DeviceId, GroupId};
 pub use membership::{Member, Membership};
+pub use search::{SearchHit, SnippetPart, search};
 
 /// Wire protocol version. Bumped on any incompatible change.
 pub const PROTOCOL_VERSION: u16 = 2;

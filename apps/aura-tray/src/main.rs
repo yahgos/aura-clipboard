@@ -106,6 +106,15 @@ async fn set_paused(node: State<'_, NodeHandle>, paused: bool) -> CmdResult {
 }
 
 #[tauri::command]
+async fn search(
+    node: State<'_, NodeHandle>,
+    query: String,
+    limit: usize,
+) -> CmdResult<Vec<aura_node::SearchResult>> {
+    node.search(&query, limit.min(200)).await.map_err(err)
+}
+
+#[tauri::command]
 async fn recopy(node: State<'_, NodeHandle>, id: String) -> CmdResult {
     let id = EntryId::from_hex(&id).ok_or("bad entry id")?;
     node.recopy(id).await.map_err(err)
@@ -114,6 +123,11 @@ async fn recopy(node: State<'_, NodeHandle>, id: String) -> CmdResult {
 // ------------------------------------------------------------------ window
 
 fn show_window(app: &AppHandle) {
+    open_window(app, false);
+}
+
+/// Shows the window, optionally with the search box focused.
+fn open_window(app: &AppHandle, focus_search: bool) {
     // Aura has no Dock icon, so macOS would leave its window behind the active app.
     #[cfg(target_os = "macos")]
     let _ = app.show();
@@ -121,9 +135,18 @@ fn show_window(app: &AppHandle) {
         let _ = w.show();
         let _ = w.unminimize();
         let _ = w.set_focus();
+        if focus_search {
+            let _ = w.emit("focus-search", ());
+        }
         return;
     }
-    let built = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+    // A new window can't receive events before its page loads; the page reads the hash.
+    let page = if focus_search {
+        "index.html#search"
+    } else {
+        "index.html"
+    };
+    let built = WebviewWindowBuilder::new(app, "main", WebviewUrl::App(page.into()))
         .title("Aura Clipboard")
         .inner_size(440.0, 600.0)
         .min_inner_size(360.0, 420.0)
@@ -188,6 +211,13 @@ fn build_menu(app: &AppHandle, s: &Status) -> tauri::Result<Menu<tauri::Wry>> {
         )?)?;
         menu.append(&MenuItem::with_id(
             app,
+            "search",
+            "Search…",
+            true,
+            None::<&str>,
+        )?)?;
+        menu.append(&MenuItem::with_id(
+            app,
             "open",
             "Devices & settings…",
             true,
@@ -240,6 +270,7 @@ fn on_menu(app: &AppHandle, id: &str) {
     let node = app.state::<NodeHandle>().inner().clone();
     match id {
         "open" => show_window(app),
+        "search" => open_window(app, true),
         "quit" => {
             tauri::async_runtime::block_on(node.shutdown());
             app.exit(0);
@@ -341,6 +372,7 @@ fn main() {
             join_group,
             rotate_passphrase,
             phone_qr,
+            search,
             set_web_enabled,
             leave_group,
             remove_device,

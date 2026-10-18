@@ -65,6 +65,17 @@ enum Cmd {
         #[arg(long, default_value_t = 3)]
         seconds: u64,
     },
+    /// Fuzzy-search the clipboard history (letters in order, typos are fine).
+    Search {
+        /// Words to look for, e.g. `aura search cgtst` finds "cargo test".
+        #[arg(required = true)]
+        words: Vec<String>,
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+        /// Put result N (1 = best) back on the clipboard of every PC.
+        #[arg(long, value_name = "N")]
+        copy: Option<usize>,
+    },
     /// Print local clipboard changes (no networking); handy to test OS support.
     Watch,
 }
@@ -141,6 +152,9 @@ async fn main() -> Result<()> {
             run(node).await
         }
         Cmd::Discover { seconds } => discover(seconds).await,
+        Cmd::Search { words, limit, copy } => {
+            search(&data_dir, &words.join(" "), limit, copy).await
+        }
         Cmd::Watch => watch().await,
     }
 }
@@ -280,6 +294,95 @@ async fn discover(seconds: u64) -> Result<()> {
         println!("no Aura devices found (is multicast blocked on this network?)");
     }
     Ok(())
+}
+
+async fn search(
+    data_dir: &std::path::Path,
+    query: &str,
+    limit: usize,
+    copy: Option<usize>,
+) -> Result<()> {
+    use std::io::IsTerminal;
+    let client = aura_node::control::Client::connect(data_dir).await;
+    let wanted = limit.max(copy.unwrap_or(0));
+    let results = match &client {
+        Some(c) => c.search(query, wanted).await?,
+        None => aura_node::search_offline(data_dir, query, wanted)
+            .context("reading the history (is Aura running with another data dir?)")?,
+    };
+    if results.is_empty() {
+        println!("no matches for \"{query}\"");
+        return Ok(());
+    }
+
+    if let Some(n) = copy {
+        let r = results
+            .get(n.wrapping_sub(1))
+            .with_context(|| format!("there are only {} results", results.len()))?;
+        match &client {
+            Some(c) => {
+                c.recopy(&r.id).await?;
+                println!("copied #{n} to every PC");
+            }
+            None => copy_offline(data_dir, &r.id, n)?,
+        }
+        return Ok(());
+    }
+
+    let color = std::io::stdout().is_terminal();
+    for (i, r) in results.iter().take(limit).enumerate() {
+        let snippet: String = r
+            .snippet
+            .iter()
+            .map(|p| {
+                if p.hit && color {
+                    format!("\x1b[1;35m{}\x1b[0m", p.text)
+                } else {
+                    p.text.clone()
+                }
+            })
+            .collect();
+        println!("{:>3}. {snippet}", i + 1);
+        let meta = format!("{} · {}", r.origin, ago(r.at_ms));
+        if color {
+            println!("     \x1b[2m{meta}\x1b[0m");
+        } else {
+            println!("     {meta}");
+        }
+    }
+    if client.is_none() {
+        println!("(Aura isn't running; searched its saved history)");
+    }
+    Ok(())
+}
+
+/// Aura isn't running: put the entry on this PC's clipboard only.
+fn copy_offline(data_dir: &std::path::Path, id: &str, n: usize) -> Result<()> {
+    if cfg!(target_os = "linux") {
+        // An X11/Wayland clipboard empties when the program that set it exits.
+        bail!("start Aura first: without it, the copy would vanish when `aura` exits");
+    }
+    let id = aura_node::EntryId::from_hex(id).context("bad entry id")?;
+    let entry = aura_node::entry_offline(data_dir, id)?.context("the entry is gone")?;
+    let data = aura_clip::ClipData::from_content(&entry.content)?;
+    use aura_clip::ClipboardBackend;
+    aura_clip::SystemClipboard::new()?.write(&data)?;
+    println!("copied #{n} to this PC only (Aura isn't running, so other PCs won't get it)");
+    Ok(())
+}
+
+fn ago(at_ms: u64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let s = now.saturating_sub(at_ms) / 1000;
+    match s {
+        0..60 => "just now".into(),
+        60..3600 => format!("{} min ago", s / 60),
+        3600..86400 => format!("{} h ago", s / 3600),
+        _ => format!("{} days ago", s / 86400),
+    }
 }
 
 async fn watch() -> Result<()> {

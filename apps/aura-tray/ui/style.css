@@ -94,7 +94,7 @@ main { padding: 0 14px 18px; }
 .hint { color: var(--muted); font-size: 12px; margin: 6px 0 10px; }
 
 label { display: block; margin: 10px 0 0; font-size: 12px; color: var(--muted); }
-input[type="password"], input:not([type]) {
+input[type="password"], input[type="search"], input:not([type]) {
   display: block;
   width: 100%;
   margin-top: 4px;
@@ -188,3 +188,12 @@ h3 { font-size: 13px; margin: 0 0 6px; }
 #qr-svg { margin-top: 10px; background: #fff; border-radius: 10px; padding: 10px; width: max-content; }
 #qr-svg svg { display: block; width: 200px; height: 200px; }
 label.check { display: flex; align-items: center; gap: 8px; margin-top: 12px; color: var(--text); }
+
+#search { margin: 4px 0 6px; }
+mark {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 1px;
+  font-weight: 600;
+}

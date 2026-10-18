@@ -1,9 +1,10 @@
+use std::collections::HashMap;
 use std::net::SocketAddr;
 
 use anyhow::{Result, anyhow};
-use aura_core::{Content, DeviceId, Entry, EntryId, GroupId};
+use aura_core::{Content, DeviceId, Entry, EntryId, GroupId, SnippetPart};
 use aura_net::proto::WebCert;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 /// Snapshot of the node for UIs. Published on a watch channel; only changes when
@@ -175,6 +176,52 @@ pub(crate) enum Command {
     Shutdown(oneshot::Sender<()>),
 }
 
+/// One search result, ready for any frontend to show.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SearchResult {
+    /// Entry id (hex), for recopying.
+    pub id: String,
+    pub kind: String,
+    /// Context around the match, split into highlighted and plain parts.
+    pub snippet: Vec<SnippetPart>,
+    /// Full text of text and HTML entries, so a frontend can copy without a second request.
+    pub text: Option<String>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub origin: String,
+    pub at_ms: u64,
+}
+
+pub(crate) fn search_results(
+    entries: &[Entry],
+    names: &HashMap<DeviceId, String>,
+    query: &str,
+    limit: usize,
+) -> Vec<SearchResult> {
+    let name = |id: &DeviceId| names.get(id).cloned().unwrap_or_else(|| id.short());
+    let by_id: HashMap<EntryId, &Entry> = entries.iter().map(|e| (e.id, e)).collect();
+    aura_core::search(entries, name, query, limit)
+        .into_iter()
+        .filter_map(|hit| {
+            let e = by_id.get(&hit.id)?;
+            let (text, width, height) = match &e.content {
+                Content::Text(t) | Content::Html { text: t, .. } => (Some(t.clone()), None, None),
+                Content::ImagePng { width, height, .. } => (None, Some(*width), Some(*height)),
+            };
+            Some(SearchResult {
+                id: hit.id.to_hex(),
+                kind: e.content.kind().to_string(),
+                snippet: hit.snippet,
+                text,
+                width,
+                height,
+                origin: name(&hit.id.origin),
+                at_ms: hit.id.hlc.wall_ms,
+            })
+        })
+        .collect()
+}
+
 pub(crate) struct WebSecrets {
     pub group_id: GroupId,
     pub password_key: [u8; 32],
@@ -279,6 +326,22 @@ impl NodeHandle {
     /// Full history, newest first.
     pub async fn entries(&self) -> Result<Vec<Entry>> {
         self.call(|reply| Command::Entries { reply }).await
+    }
+
+    /// Fuzzy search over the whole history, best match first.
+    pub async fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
+        let entries = self.entries().await?;
+        let names: HashMap<DeviceId, String> = self
+            .status()
+            .members
+            .into_iter()
+            .filter_map(|m| Some((m.device_id.parse().ok()?, m.name)))
+            .collect();
+        let query = query.to_string();
+        Ok(
+            tokio::task::spawn_blocking(move || search_results(&entries, &names, &query, limit))
+                .await?,
+        )
     }
 
     pub async fn entry(&self, id: EntryId) -> Result<Option<Entry>> {

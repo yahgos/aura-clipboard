@@ -556,3 +556,83 @@ async fn every_member_shares_the_phone_page_certificate() {
             .unwrap()
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn fuzzy_search_works_live_over_the_control_channel_and_offline() {
+    let a = TestNode::new("alpha").await;
+    let mut b = TestNode::new("bravo").await;
+    a.handle.create_group("Home", PASS).await.unwrap();
+    b.handle
+        .join(JoinTarget::Addr(a.addr()), PASS)
+        .await
+        .unwrap();
+    eventually("connected", || a.online_peers() == 1).await;
+
+    for text in [
+        "cargo test -p aura-web",
+        "git status",
+        "the wifi password is hunter2",
+    ] {
+        a.copy(text);
+        eventually("b got it", || b.text().as_deref() == Some(text)).await;
+    }
+
+    // Letters in order, and a typo.
+    let hits = b.handle.search("cgtst", 10).await.unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].text.as_deref(), Some("cargo test -p aura-web"));
+    assert_eq!(hits[0].origin, "alpha");
+    let lit: String = hits[0]
+        .snippet
+        .iter()
+        .filter(|p| p.hit)
+        .map(|p| p.text.as_str())
+        .collect();
+    assert_eq!(lit, "cgtst");
+    let hits = b.handle.search("pasword", 10).await.unwrap();
+    assert_eq!(
+        hits[0].text.as_deref(),
+        Some("the wifi password is hunter2")
+    );
+
+    // The CLI's control channel gives the same results.
+    let client = aura_node::control::Client::connect(b.dir.path())
+        .await
+        .expect("b is running");
+    assert_eq!(
+        client.search("cgtst", 10).await.unwrap(),
+        b.handle.search("cgtst", 10).await.unwrap()
+    );
+    let err = aura_node::control::Client::connect(b.dir.path())
+        .await
+        .unwrap()
+        .with_token("not the token")
+        .search("git", 10)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("bad token"), "{err:#}");
+
+    // Recopy through the channel reaches every PC.
+    let git = client.search("git status", 1).await.unwrap().remove(0);
+    client.recopy(&git.id).await.unwrap();
+    eventually("alpha got the recopy", || {
+        a.text().as_deref() == Some("git status")
+    })
+    .await;
+
+    // With bravo stopped, the CLI searches its database directly.
+    b.handle.shutdown().await;
+    eventually("control file removed", || {
+        !b.dir.path().join("control.json").exists()
+    })
+    .await;
+    assert!(
+        aura_node::control::Client::connect(b.dir.path())
+            .await
+            .is_none()
+    );
+    let offline = aura_node::search_offline(b.dir.path(), "cgtst", 10).unwrap();
+    assert_eq!(offline[0].text.as_deref(), Some("cargo test -p aura-web"));
+    assert_eq!(offline[0].origin, "alpha");
+    b.restart().await;
+}
