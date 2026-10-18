@@ -5,6 +5,7 @@ members = [
     "crates/aura-net",
     "crates/aura-clip",
     "crates/aura-node",
+    "crates/aura-web",
     "apps/aura-cli",
     "apps/aura-tray",
 ]
@@ -13,6 +14,7 @@ default-members = [
     "crates/aura-net",
     "crates/aura-clip",
     "crates/aura-node",
+    "crates/aura-web",
     "apps/aura-cli",
 ]
 
@@ -27,6 +29,7 @@ aura-core = { path = "crates/aura-core" }
 aura-net = { path = "crates/aura-net" }
 aura-clip = { path = "crates/aura-clip" }
 aura-node = { path = "crates/aura-node" }
+aura-web = { path = "crates/aura-web" }
 
 anyhow = "1"
 thiserror = "2"

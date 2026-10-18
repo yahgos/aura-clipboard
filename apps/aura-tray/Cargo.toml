@@ -14,6 +14,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 aura-node.workspace = true
+aura-web.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 tokio.workspace = true

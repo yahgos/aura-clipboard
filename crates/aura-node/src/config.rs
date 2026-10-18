@@ -6,6 +6,8 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_PORT: u16 = 47820;
+/// HTTPS port of the phone page served by the fofoqueiro.
+pub const DEFAULT_WEB_PORT: u16 = 47821;
 
 /// User-editable settings, stored as `config.toml` in the data directory.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,6 +28,9 @@ pub struct Config {
     pub history_bytes: usize,
     /// "keyring" (OS keychain) or "file" (0600 file in the data dir).
     pub secret_store: SecretStoreKind,
+    /// Take part in the election of the PC that serves the phone page.
+    pub web_enabled: bool,
+    pub web_port: u16,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,6 +59,8 @@ impl Default for Config {
             } else {
                 SecretStoreKind::Keyring
             },
+            web_enabled: true,
+            web_port: DEFAULT_WEB_PORT,
         }
     }
 }
@@ -64,6 +71,12 @@ impl Config {
     }
 
     /// Loads `config.toml` from `dir`, writing the defaults if it does not exist yet.
+    pub fn save(&self, dir: &Path) -> Result<()> {
+        std::fs::create_dir_all(dir)?;
+        std::fs::write(dir.join("config.toml"), toml::to_string_pretty(self)?)?;
+        Ok(())
+    }
+
     pub fn load_or_init(dir: &Path) -> Result<Self> {
         let path = dir.join("config.toml");
         if path.exists() {

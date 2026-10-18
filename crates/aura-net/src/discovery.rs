@@ -37,6 +37,7 @@ pub enum DiscoveryEvent {
 pub struct Discovery {
     daemon: ServiceDaemon,
     registered: Option<String>,
+    web_registered: Option<String>,
 }
 
 impl Discovery {
@@ -74,11 +75,35 @@ impl Discovery {
         let mut d = Self {
             daemon,
             registered: None,
+            web_registered: None,
         };
         if let Some(advert) = advert {
             d.advertise(advert)?;
         }
         Ok((d, rx))
+    }
+
+    /// Claims (`Some(port)`) or releases (`None`) the `aura.local` host name for the
+    /// phone page. Only the fofoqueiro holds it, so the name follows the role.
+    pub fn advertise_web(&mut self, port: Option<u16>) -> Result<()> {
+        if let Some(old) = self.web_registered.take() {
+            let _ = self.daemon.unregister(&old);
+        }
+        let Some(port) = port else {
+            return Ok(());
+        };
+        let info = ServiceInfo::new(
+            "_https._tcp.local.",
+            "Aura Clipboard",
+            "aura.local.",
+            "",
+            port,
+            &[("path", "/")][..],
+        )?
+        .enable_addr_auto();
+        self.web_registered = Some(info.get_fullname().to_string());
+        self.daemon.register(info)?;
+        Ok(())
     }
 
     /// (Re-)registers our service, e.g. after joining a group.
@@ -110,7 +135,10 @@ impl Discovery {
 
 impl Drop for Discovery {
     fn drop(&mut self) {
-        if let Some(name) = self.registered.take() {
+        for name in [self.registered.take(), self.web_registered.take()]
+            .into_iter()
+            .flatten()
+        {
             let _ = self.daemon.unregister(&name);
         }
         let _ = self.daemon.shutdown();

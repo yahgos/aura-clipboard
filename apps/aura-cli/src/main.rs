@@ -41,6 +41,9 @@ enum Cmd {
         /// Disable mDNS discovery.
         #[arg(long)]
         no_discovery: bool,
+        /// Never serve the phone page from this PC.
+        #[arg(long)]
+        no_web: bool,
         /// Create a new group with this name before running.
         #[arg(long, conflicts_with_all = ["join", "join_group"])]
         create_group: Option<String>,
@@ -94,6 +97,7 @@ async fn main() -> Result<()> {
             port,
             peers,
             no_discovery,
+            no_web,
             create_group,
             join,
             join_group,
@@ -109,6 +113,7 @@ async fn main() -> Result<()> {
             }
             cfg.static_peers.extend(peers);
             cfg.discovery &= !no_discovery;
+            cfg.web_enabled &= !no_web;
             println!("data dir: {}", data_dir.display());
             let node = Node::start(&data_dir, cfg, aura_node::system_clipboard()).await?;
 
@@ -131,6 +136,8 @@ async fn main() -> Result<()> {
                 node.join(JoinTarget::Group(gid), &passphrase(false)?)
                     .await?;
             }
+            // Serves the phone page whenever this PC is elected to.
+            let _web = aura_web::spawn(node.clone());
             run(node).await
         }
         Cmd::Discover { seconds } => discover(seconds).await,
@@ -147,7 +154,7 @@ async fn run(node: NodeHandle) -> Result<()> {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => break,
             ev = events.recv() => match ev {
-                Ok(ev) => print_event(&ev),
+                Ok(ev) => print_event(&ev, &node.status()),
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                 Err(_) => break,
             },
@@ -214,7 +221,7 @@ fn print_status(s: &Status) {
     println!("{}", summary(s));
 }
 
-fn print_event(ev: &Event) {
+fn print_event(ev: &Event, status: &Status) {
     match ev {
         Event::LocalCopy { preview } => println!("⇡ copied: {preview}"),
         Event::RemoteApplied { from, preview } => println!("⇣ from {from}: {preview}"),
@@ -225,6 +232,19 @@ fn print_event(ev: &Event) {
         Event::GroupJoined { name } => println!("✓ joined group \"{name}\""),
         Event::GroupLeft => println!("left the group"),
         Event::PassphraseChanged { by } => println!("🔑 group passphrase changed by {by}"),
+        Event::PhonePage { serving: true } => {
+            let port = status.web_port;
+            println!(
+                "📱 this PC now serves the phone page: https://{}:{port}",
+                aura_web::WEB_HOST
+            );
+            if let Some(ip) = &status.lan_ip {
+                println!("   (or https://{ip}:{port} if your phone can't open aura.local)");
+            }
+        }
+        Event::PhonePage { serving: false } => {
+            println!("📱 another PC serves the phone page now");
+        }
         Event::JoinRejected { from_addr } => {
             println!("! rejected join attempt from {from_addr} (wrong passphrase)")
         }

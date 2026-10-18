@@ -1,7 +1,8 @@
 use std::net::SocketAddr;
 
 use anyhow::{Result, anyhow};
-use aura_core::{DeviceId, EntryId, GroupId};
+use aura_core::{Content, DeviceId, Entry, EntryId, GroupId};
+use aura_net::proto::WebCert;
 use serde::Serialize;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
@@ -21,6 +22,17 @@ pub struct Status {
     pub history: Vec<HistoryItem>,
     /// Groups seen on the network via mDNS (other than ours).
     pub discovered_groups: Vec<DiscoveredGroup>,
+    /// This PC takes part in the phone-page election.
+    pub web_enabled: bool,
+    pub web_port: u16,
+    /// Name of the PC that serves (or is about to serve) the phone page.
+    pub fofoqueiro: Option<String>,
+    /// LAN address of that PC, for phones that can't resolve `aura.local`.
+    pub fofoqueiro_ip: Option<String>,
+    /// This PC is serving the phone page right now.
+    pub is_fofoqueiro: bool,
+    /// Expiry of the group's phone-page certificate; changes when it is renewed.
+    pub web_cert_expires_ms: Option<u64>,
 }
 
 impl Status {
@@ -70,17 +82,42 @@ pub struct DiscoveredGroup {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
-    LocalCopy { preview: String },
-    RemoteApplied { from: String, preview: String },
-    PeerConnected { name: String },
-    PeerDisconnected { name: String },
-    MemberJoined { name: String },
-    MemberRemoved { name: String },
-    GroupJoined { name: String },
+    LocalCopy {
+        preview: String,
+    },
+    RemoteApplied {
+        from: String,
+        preview: String,
+    },
+    PeerConnected {
+        name: String,
+    },
+    PeerDisconnected {
+        name: String,
+    },
+    MemberJoined {
+        name: String,
+    },
+    MemberRemoved {
+        name: String,
+    },
+    GroupJoined {
+        name: String,
+    },
     GroupLeft,
-    PassphraseChanged { by: String },
-    JoinRejected { from_addr: String },
-    Warning { message: String },
+    /// This PC started or stopped serving the phone page.
+    PhonePage {
+        serving: bool,
+    },
+    PassphraseChanged {
+        by: String,
+    },
+    JoinRejected {
+        from_addr: String,
+    },
+    Warning {
+        message: String,
+    },
 }
 
 pub enum JoinTarget {
@@ -120,7 +157,32 @@ pub(crate) enum Command {
         reply: Reply,
     },
     AddPeer(SocketAddr),
+    Entries {
+        reply: Reply<Vec<Entry>>,
+    },
+    Entry {
+        id: EntryId,
+        reply: Reply<Option<Entry>>,
+    },
+    WebSecrets {
+        reply: Reply<WebSecrets>,
+    },
+    Publish {
+        content: Content,
+        reply: Reply,
+    },
+    SetWebEnabled(bool),
     Shutdown(oneshot::Sender<()>),
+}
+
+pub(crate) struct WebSecrets {
+    pub group_id: GroupId,
+    pub password_key: [u8; 32],
+    pub web_cert: Option<WebCert>,
+}
+
+fn constant_time_eq(a: &[u8; 32], b: &[u8; 32]) -> bool {
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 fn check_passphrase(passphrase: &str) -> Result<()> {
@@ -212,6 +274,55 @@ impl NodeHandle {
     /// Makes an old history entry the current clipboard everywhere.
     pub async fn recopy(&self, id: EntryId) -> Result<()> {
         self.call(|reply| Command::Recopy { id, reply }).await
+    }
+
+    /// Full history, newest first.
+    pub async fn entries(&self) -> Result<Vec<Entry>> {
+        self.call(|reply| Command::Entries { reply }).await
+    }
+
+    pub async fn entry(&self, id: EntryId) -> Result<Option<Entry>> {
+        self.call(|reply| Command::Entry { id, reply }).await
+    }
+
+    /// Checks a passphrase against the group's current key (Argon2, so it takes a moment).
+    pub async fn verify_passphrase(&self, passphrase: &str) -> Result<bool> {
+        let secrets = self.call(|reply| Command::WebSecrets { reply }).await?;
+        let passphrase = passphrase.to_string();
+        let candidate = tokio::task::spawn_blocking(move || {
+            aura_net::enroll::password_key(&passphrase, secrets.group_id)
+        })
+        .await??;
+        Ok(constant_time_eq(&candidate, &secrets.password_key))
+    }
+
+    /// Key for signing phone-page sessions. Derived from the group key, so a session is
+    /// valid on every member and a passphrase change logs every phone out.
+    pub async fn web_session_key(&self) -> Result<[u8; 32]> {
+        let secrets = self.call(|reply| Command::WebSecrets { reply }).await?;
+        Ok(blake3::derive_key(
+            "aura-clipboard v2 web session",
+            &secrets.password_key,
+        ))
+    }
+
+    /// The group's shared phone-page certificate, if one exists yet.
+    pub async fn web_cert(&self) -> Result<Option<WebCert>> {
+        Ok(self
+            .call(|reply| Command::WebSecrets { reply })
+            .await?
+            .web_cert)
+    }
+
+    /// Makes `content` the current clipboard on this PC and every other, as if it had
+    /// been copied here. Used by the phone page's "Send to PCs".
+    pub async fn publish(&self, content: Content) -> Result<()> {
+        self.call(|reply| Command::Publish { content, reply }).await
+    }
+
+    /// Opts this PC in or out of serving the phone page (saved to config.toml).
+    pub async fn set_web_enabled(&self, enabled: bool) -> Result<()> {
+        self.send(Command::SetWebEnabled(enabled)).await
     }
 
     pub async fn add_peer(&self, addr: SocketAddr) -> Result<()> {

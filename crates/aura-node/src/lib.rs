@@ -6,6 +6,7 @@ mod api;
 pub mod config;
 mod secrets;
 mod store;
+pub mod webcert;
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::Path;
@@ -18,7 +19,8 @@ use tokio::sync::{broadcast, mpsc, watch};
 pub use api::{
     DiscoveredGroup, Event, GroupStatus, HistoryItem, JoinTarget, MemberStatus, NodeHandle, Status,
 };
-pub use aura_core::{DeviceId, EntryId, GroupId};
+pub use aura_core::{Content, DeviceId, Entry, EntryId, GroupId};
+pub use aura_net::proto::WebCert;
 pub use config::{Config, SecretStoreKind, default_data_dir};
 
 use actor::{Actor, ActorMsg, ActorParts, Internal};
@@ -85,6 +87,7 @@ impl Node {
             status_tx,
             events_tx: events_tx.clone(),
             listener,
+            data_dir: data_dir.to_path_buf(),
         })?;
         tokio::spawn(async move {
             // `run` consumes the actor, so the database lock is released before we ack.

@@ -89,8 +89,8 @@ KeePassXC marks its copies on all three systems.
 ### If the PCs don't find each other
 
 Discovery only works when the PCs are on the same network, and guest Wi-Fi and
-some routers block it. Firewalls need to allow TCP port 47820 and UDP port 5353
-(mDNS).
+some routers block it. Firewalls need to allow TCP ports 47820 and 47821 and UDP
+port 5353 (mDNS).
 
 You can skip discovery: click **Enter an address instead** in the Join form and
 type the other PC's IP address, for example `192.168.1.20`. Each PC shows its
@@ -101,6 +101,33 @@ own address at the top of Aura's window.
 Open **Devices & settings**, click **Remove** next to the PC, then use **Change
 passphrase**. The removed PC stops receiving clipboard entries immediately, and
 the new passphrase keeps it from joining again. Your other PCs stay connected.
+
+## Use it from your phone
+
+One of your PCs, the fofoqueiro, also serves your clipboard as a web page, so
+your phone can see the history, copy entries and send text to the PCs without
+installing anything. The PCs pick the fofoqueiro themselves, and another one
+takes over when it shuts down.
+
+On the phone:
+
+1. Open `https://aura.local:47821`, or scan the QR code that **Show QR code**
+   displays in Aura's window on any PC. The QR code also logs you in.
+2. The browser warns that the connection isn't private, because the
+   certificate belongs to your group instead of a public authority. Accept it
+   once: on iPhone tap **Show Details**, then **visit this website**; on
+   Android tap **Advanced**, then **Proceed**. All your PCs share the
+   certificate, so the warning doesn't come back when another PC takes over.
+3. If you didn't scan the QR code, log in with the group passphrase. The login
+   lasts 30 days from your last visit and ends when the passphrase changes.
+4. To get an app-like icon, use **Add to Home Screen** from the browser's
+   share or menu button.
+
+If `aura.local` doesn't open (some Android versions and networks don't resolve
+`.local` names), use the IP address Aura's window shows under **Phone**. A PC
+can opt out of serving the page with the **Allow this PC to serve the phone
+page** checkbox, or with `aura run --no-web`. Firewalls need to allow TCP port
+47821.
 
 ## Command-line version
 
@@ -129,8 +156,9 @@ The first run creates `config.toml` in the data directory:
 - Windows: `%APPDATA%\aura\aura-clipboard\data`
 
 The file holds the device name, the port (47820 by default), static peers for
-networks without multicast, size limits, the history length and the secret
-store (`keyring` or `file`). The keyring is the macOS Keychain, the Windows
+networks without multicast, size limits, the history length, the secret store
+(`keyring` or `file`), the phone page port (47821) and whether this PC may serve
+the phone page (`web_enabled`). The keyring is the macOS Keychain, the Windows
 Credential Manager, or the Secret Service (GNOME Keyring or KWallet) on Linux.
 When no keyring is available, Aura keeps its secrets in a file in the data
 directory that only your user can read. Debug builds always use that file, so
@@ -162,6 +190,13 @@ entry wins on every PC, with the device id breaking ties. Entries spread
 through the full mesh, and duplicates are dropped. A PC that was asleep catches
 up when it reconnects.
 
+The phone page is served by one PC at a time. PCs that allow it hold an
+election, and the lowest device id among the connected ones wins after holding
+that spot for three seconds. The winner claims the `aura.local` name over mDNS
+and serves HTTPS with a certificate shared by the whole group. Phone logins are
+signed tokens derived from the group key, so they work on whichever PC serves
+the page and stop working when the passphrase changes.
+
 Aura syncs text, HTML with its plain-text version, and images, which travel as
 PNG. It skips copies that carry a password-manager marker:
 `org.nspasteboard.ConcealedType` on macOS,
@@ -175,6 +210,7 @@ other PCs, so their entries don't bounce back as new copies.
 | [`aura-net`](crates/aura-net) | Wire protocol, Noise sessions with chunking, SPAKE2 enrollment, mDNS |
 | [`aura-clip`](crates/aura-clip) | OS clipboard (arboard + native change counters), echo suppression |
 | [`aura-node`](crates/aura-node) | The engine: actor, storage (redb), secrets (keychain/file), `NodeHandle` API |
+| [`aura-web`](crates/aura-web) | The phone page: HTTPS server, sessions, QR login, embedded web app |
 | [`aura-cli`](apps/aura-cli) | `aura` binary: headless runner and debugging |
 | [`aura-tray`](apps/aura-tray) | Tauri v2 tray app |
 
@@ -197,6 +233,12 @@ run several nodes in one process with in-memory clipboards. They cover:
 - 1 MB images
 - pausing, and recopying from history
 - passphrase changes, including PCs that were offline and two changes at once
+- electing the PC that serves the phone page, failover, and opting out
+
+[`crates/aura-web/tests/web.rs`](crates/aura-web/tests/web.rs) drives the phone
+page over real HTTPS: login and rate limiting, QR login, history and images,
+sending text, live updates, logins surviving failover, and logout after a
+passphrase change.
 
 `crates/aura-clip/tests/x11_marker.rs` checks the KDE password marker against a
 real X server. It needs Xvfb and `xclip`:

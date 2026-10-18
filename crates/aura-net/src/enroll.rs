@@ -126,7 +126,7 @@ pub async fn join(
     let mut session = Session::new(stream, transport)?;
     session.send(&info).await?;
     match session.recv::<JoinResult>().await {
-        Ok(JoinResult::Welcome(w)) => Ok((w, session.remote_public_key)),
+        Ok(JoinResult::Welcome(w)) => Ok((*w, session.remote_public_key)),
         Ok(JoinResult::Refused(reason)) => Err(JoinError::Refused(reason)),
         // Connection closed right after the handshake: the member could not verify us.
         Err(_) => Err(JoinError::WrongPassphrase),
@@ -195,7 +195,7 @@ where
     let mut session = Session::new(incoming.stream, transport)?;
     let info: JoinInfo = session.recv().await?;
     let result = match admit(session.remote_public_key, info).await {
-        Ok(welcome) => JoinResult::Welcome(welcome),
+        Ok(welcome) => JoinResult::Welcome(Box::new(welcome)),
         Err(e) => JoinResult::Refused(e.to_string()),
     };
     session.send(&result).await?;
@@ -287,6 +287,7 @@ mod tests {
                         version: Default::default(),
                         password_key: w,
                     },
+                    web_cert: None,
                     membership: Membership::new(),
                     addr_hints: vec![],
                 })

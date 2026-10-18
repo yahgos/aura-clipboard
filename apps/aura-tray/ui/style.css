@@ -181,3 +181,10 @@ summary { cursor: pointer; color: var(--muted); font-size: 12px; }
 }
 #toast.show { opacity: 1; transform: none; }
 #toast.error { background: var(--danger); color: #fff; }
+
+.phone { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+h3 { font-size: 13px; margin: 0 0 6px; }
+#phone-info { -webkit-user-select: text; user-select: text; }
+#qr-svg { margin-top: 10px; background: #fff; border-radius: 10px; padding: 10px; width: max-content; }
+#qr-svg svg { display: block; width: 200px; height: 200px; }
+label.check { display: flex; align-items: center; gap: 8px; margin-top: 12px; color: var(--text); }

@@ -1,0 +1,29 @@
+[package]
+name = "aura-web"
+description = "The phone page served by the elected PC (fofoqueiro)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+aura-node.workspace = true
+aura-net.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+blake3.workspace = true
+hex.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+axum = "0.8"
+axum-server = { version = "0.8", default-features = false, features = ["tls-rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+serde_json = "1"
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+base64 = "0.22"
+
+[dev-dependencies]
+aura-clip.workspace = true
+tempfile.workspace = true
+tracing-subscriber.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "cookies", "stream"] }
