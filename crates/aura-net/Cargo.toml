@@ -19,6 +19,8 @@ snow.workspace = true
 spake2.workspace = true
 argon2.workspace = true
 mdns-sd.workspace = true
+# Same version mdns-sd uses; lists interface addresses for our announcements.
+if-addrs = "0.15"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

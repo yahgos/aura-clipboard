@@ -469,6 +469,7 @@ dependencies = [
  "aura-core",
  "blake3",
  "hex",
+ "if-addrs",
  "mdns-sd",
  "postcard",
  "serde",
