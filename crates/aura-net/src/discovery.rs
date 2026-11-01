@@ -6,7 +6,7 @@ use std::net::SocketAddr;
 
 use anyhow::Result;
 use aura_core::{DeviceId, GroupId, PROTOCOL_VERSION};
-use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
+use mdns_sd::{IfKind, ServiceDaemon, ServiceEvent, ServiceInfo};
 use tokio::sync::mpsc;
 
 pub const SERVICE_TYPE: &str = "_aura._tcp.local.";
@@ -45,6 +45,9 @@ impl Discovery {
     /// devices arrive on the returned channel.
     pub fn start(advert: Option<&Advert>) -> Result<(Self, mpsc::Receiver<DiscoveryEvent>)> {
         let daemon = ServiceDaemon::new()?;
+        // Phones and other PCs never reach us over loopback, and announcing there too
+        // gives the daemon a second copy of our names to "conflict" with.
+        daemon.disable_interface(vec![IfKind::LoopbackV4, IfKind::LoopbackV6])?;
         let browse = daemon.browse(SERVICE_TYPE)?;
         let me = advert.map(|a| a.device_id);
         let (tx, rx) = mpsc::channel(64);
@@ -102,8 +105,7 @@ impl Discovery {
         )?
         .enable_addr_auto();
         self.web_registered = Some(info.get_fullname().to_string());
-        self.daemon.register(info)?;
-        Ok(())
+        self.register(info)
     }
 
     /// (Re-)registers our service, e.g. after joining a group.
@@ -128,6 +130,17 @@ impl Discovery {
         let info = ServiceInfo::new(SERVICE_TYPE, &did, &host, "", advert.port, &props[..])?
             .enable_addr_auto();
         self.registered = Some(info.get_fullname().to_string());
+        self.register(info)
+    }
+
+    /// Registers without the RFC 6762 conflict probe. After a sleep/wake or when the
+    /// LAN's addresses change, the probe sees our own earlier announcement (with the
+    /// old addresses), takes it for another device and renames us, e.g. `aura.local`
+    /// to `aura-24216.local`, which phones then can't find. Our names are ours: the
+    /// device host name embeds the device id, and only the elected PC claims
+    /// `aura.local`.
+    fn register(&self, mut info: ServiceInfo) -> Result<()> {
+        info.set_requires_probe(false);
         self.daemon.register(info)?;
         Ok(())
     }
