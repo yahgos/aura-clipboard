@@ -776,6 +776,12 @@ impl Actor {
             Internal::Discovery(ev) => self.on_discovery(ev),
             Internal::Tick => {
                 self.lan_ip = crate::lan_ip(); // Wi-Fi changes, DHCP renewals
+                // Point our mDNS records (incl. aura.local) at the current addresses.
+                if let Some(d) = &mut self.discovery
+                    && let Err(e) = d.refresh()
+                {
+                    tracing::warn!("mDNS refresh failed: {e:#}");
+                }
                 self.dial_missing();
             }
         }
