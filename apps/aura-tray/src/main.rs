@@ -14,6 +14,7 @@ use tauri::{
     AppHandle, Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt as _};
+use tauri_plugin_dialog::{DialogExt as _, MessageDialogKind};
 use tauri_plugin_notification::NotificationExt as _;
 
 const TRAY_ID: &str = "aura";
@@ -386,6 +387,7 @@ fn main() {
             Some(vec![AUTOSTART_ARG]),
         ))
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             get_status,
             create_group,
@@ -407,11 +409,26 @@ fn main() {
                 .map(Into::into)
                 .unwrap_or_else(default_data_dir);
             let cfg = Config::load_or_init(&data_dir)?;
-            let node = tauri::async_runtime::block_on(Node::start(
+            let started = tauri::async_runtime::block_on(Node::start(
                 &data_dir,
                 cfg,
                 aura_node::system_clipboard(),
-            ))?;
+            ));
+            let node = match started {
+                Ok(node) => node,
+                Err(e) => {
+                    // Say why before quitting; a tray app that just vanishes looks like
+                    // it lost everything.
+                    tracing::error!("{e:#}");
+                    let handle = app.handle().clone();
+                    app.dialog()
+                        .message(format!("{e:#}"))
+                        .title("Aura Clipboard couldn't start")
+                        .kind(MessageDialogKind::Error)
+                        .show(move |_| handle.exit(1));
+                    return Ok(());
+                }
+            };
             app.manage(node.clone());
             // Serves the phone page whenever this PC is elected to.
             tauri::async_runtime::spawn(aura_web::supervise(node.clone()));

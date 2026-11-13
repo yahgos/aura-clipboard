@@ -50,10 +50,30 @@ impl Node {
         clipboard: ClipboardFactory,
     ) -> Result<NodeHandle> {
         let store = Store::open(data_dir)?;
-        let secret_store = SecretStore::new(cfg.secret_store, data_dir);
-        let secrets = secret_store
-            .load_or_create()
-            .context("loading device secrets")?;
+        let in_group = store.group()?.is_some();
+        // Right after login or an OS update the keychain can be locked for a moment.
+        // Give it a few tries; in a group, giving up stops the start (see
+        // `SecretStore::load_or_create`) rather than leaving the group.
+        let mut retries = [2, 5, 10].into_iter();
+        let (secret_store, secrets) = loop {
+            let secret_store = SecretStore::new(cfg.secret_store, data_dir);
+            match secret_store.load_or_create(in_group) {
+                Ok(secrets) => break (secret_store, secrets),
+                Err(e) => match retries.next() {
+                    Some(secs) => {
+                        tracing::warn!("loading device secrets: {e:#}; retrying in {secs}s");
+                        tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+                    }
+                    None => {
+                        return Err(e.context(
+                            "Aura couldn't read this PC's keys, so it didn't start. Your group \
+                             is still saved: unlock the keychain or allow Aura to use it, then \
+                             open Aura again",
+                        ));
+                    }
+                },
+            }
+        };
         let listener = bind(cfg.port).await?;
         tracing::info!(
             "device {} ({}) listening on {}",
